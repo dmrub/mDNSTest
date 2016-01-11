@@ -56,3 +56,13 @@ if (BONJOUR_FOUND)
   add_executable(mDNSTestClient client.cpp )
   target_link_libraries(mDNSTestClient ${BONJOUR_LIBRARIES})
 endif()
+
+if (AVAHI_FOUND)
+  include_directories(${AVAHI_INCLUDE_DIRS})
+
+  add_executable(client-publish-service client-publish-service.c )
+  target_link_libraries(client-publish-service ${AVAHI_LIBRARIES})
+
+  add_executable(client-browse-services client-browse-services.c )
+  target_link_libraries(client-browse-services ${AVAHI_LIBRARIES})
+endif()
