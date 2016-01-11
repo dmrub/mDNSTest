@@ -15,7 +15,7 @@ else()
   find_path(AVAHI_CLIENT_INCLUDE_DIRS avahi-client/client.h)
   find_path(AVAHI_COMMON_INCLUDE_DIRS avahi-common/defs.h)
   find_library(AVAHI_COMMON_LIBRARIES avahi-common)
-  find_library(AVAHI_CLIENT_LIBRARIES avahi-common)
+  find_library(AVAHI_CLIENT_LIBRARIES avahi-client)
   set(AVAHI_INCLUDE_DIRS ${AVAHI_CLIENT_INCLUDE_DIRS}
                          ${AVAHI_COMMON_INCLUDE_DIRS})
   set(AVAHI_LIBRARIES ${AVAHI_CLIENT_LIBRARIES}
