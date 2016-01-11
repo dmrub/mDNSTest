@@ -1,11 +1,18 @@
 #include <dns_sd.h>
 #include <iostream>
 
+#ifndef _WIN32
 #include <fcntl.h>
 #include <cstdio>
+#endif
+
+#ifdef _WIN32
+    #pragma comment(lib, "dnssd.lib")
+#endif
 
 using namespace std;
 
+#ifndef _WIN32
 // AVAHI
 static int set_nonblocking(int fd)
 {
@@ -22,12 +29,13 @@ static int set_nonblocking(int fd)
     return ioctl(fd, FIOBIO, &flags);
 #endif
 }
+#endif
 
 
 /**************************************************************************************
  *
  **************************************************************************************/
-void resolveReply (
+void DNSSD_API resolveReply (
     DNSServiceRef sdRef,
     DNSServiceFlags flags,
     uint32_t interfaceIndex,
@@ -48,7 +56,7 @@ void resolveReply (
 /**************************************************************************************
  *
  **************************************************************************************/
-void browseReply (
+void DNSSD_API browseReply (
     DNSServiceRef sdRef,
     DNSServiceFlags flags,
     uint32_t interfaceIndex,
@@ -95,17 +103,21 @@ int main(int argc, char** argv)
         std::cout << "No error" << std::endl;
     int socket = DNSServiceRefSockFD(*sdRef);
 
+#ifndef _WIN32
     set_nonblocking(socket);
     fd_set read_fds;
     FD_ZERO(&read_fds);
     FD_SET(socket, &read_fds);
-
+#endif
     while (1)
     {
+
+#ifndef _WIN32
         if(select(socket+1, &read_fds, NULL, NULL, NULL)  < 0)
         {
             perror("select");
         }
+#endif
 
         DNSServiceErrorType err2 = DNSServiceProcessResult(*sdRef);
         std::cerr<<"err2=" << err2 << std::endl;

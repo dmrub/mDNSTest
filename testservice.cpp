@@ -1,15 +1,25 @@
-#include <dns_sd.h>
+#ifdef _WIN32
+	#include <winsock2.h>
+	#include <ws2tcpip.h>
+    #pragma comment(lib, "Ws2_32.lib")
+    #pragma comment(lib, "dnssd.lib")
+#else
 #include <arpa/inet.h>
+#endif
+#include <stdint.h>
+#include <dns_sd.h>
 #include <iostream>
 #include <cstring>
 
-void DNSSDRegisterCallback(DNSServiceRef sdRef,
-                           DNSServiceFlags flags,
-                           DNSServiceErrorType errorCode,
-                           const char *name,
-                           const char *regtype,
-                           const char *domain,
-                           void *context )
+extern "C" void DNSSD_API DNSSDRegisterCallback(
+    DNSServiceRef                       sdRef,
+    DNSServiceFlags                     flags,
+    DNSServiceErrorType                 errorCode,
+    const char                          *name,
+    const char                          *regtype,
+    const char                          *domain,
+    void                                *context
+    )
 {
     // This is the asynchronous callback
     // Can be used to handle async. errors, get data from instantiated service or record references, etc.
@@ -37,6 +47,7 @@ int main(int argc, char *argv[])
     const void *txtRecord = relPath; // NULL
 
     void *context = 0; // context pointer to data to be passed to callback
+
     DNSServiceErrorType errorCode =
         DNSServiceRegister(&sdRef,
                            flags,
