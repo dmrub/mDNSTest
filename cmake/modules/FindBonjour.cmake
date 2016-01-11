@@ -19,10 +19,18 @@ if(NOT APPLE)
     FIND_PATH(BONJOUR_INCLUDE_DIR dns_sd.h
       PATHS $ENV{PROGRAMW6432}/Bonjour\ SDK/Include
     )
-    FIND_LIBRARY(BONJOUR_LIBRARY
-      NAMES dnssd
-      PATHS $ENV{PROGRAMW6432}/Bonjour\ SDK/Lib/x64
-    )
+    if( CMAKE_SIZEOF_VOID_P EQUAL 8 )
+      FIND_LIBRARY(BONJOUR_LIBRARY
+        NAMES dnssd
+        PATHS $ENV{PROGRAMW6432}/Bonjour\ SDK/Lib/x64
+      )
+    else( CMAKE_SIZEOF_VOID_P EQUAL 8 )
+      FIND_LIBRARY(BONJOUR_LIBRARY
+        NAMES dnssd
+        PATHS $ENV{PROGRAMW6432}/Bonjour\ SDK/Lib/Win32
+      )
+    endif( CMAKE_SIZEOF_VOID_P EQUAL 8 )
+
   ELSE(WIN32)
     find_path(BONJOUR_INCLUDE_DIR dns_sd.h
       PATHS /opt/dnssd/include /usr/include  /usr/local/include
