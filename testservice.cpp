@@ -35,9 +35,9 @@ int main(int argc, char *argv[])
     DNSServiceFlags flags = 0;
     uint32_t interfaceIndex = 0; // 0 means try to register on all available interfaces
     // service name setup
-    char *name = "ARVIDA Service 1"; // service name
-    char *regtype = "_http._tcp"; // service type
-    char *domain = "local"; // service domain
+    const char *name = "ARVIDA Service 1"; // service name
+    const char *regtype = "_http._tcp"; // service type
+    const char *domain = "local"; // service domain
     char *host = 0; // null means use the computer's default host name
     // service name setup done
     uint16_t port = htons(8080); // network byte order of 8080
