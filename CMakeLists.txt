@@ -72,3 +72,15 @@ if (AVAHI_FOUND)
   add_executable(client-browse-services client-browse-services.c )
   target_link_libraries(client-browse-services ${AVAHI_LIBRARIES})
 endif()
+
+if (AVAHI_FOUND)
+    add_library(MDNSWrapper "src/AvahiMDNSManager.cpp")
+    target_link_libraries(MDNSWrapper ${AVAHI_LIBRARIES})
+elseif(BONJOUR_FOUND)
+
+else()
+    add_library(MDNSWrapper "src/DummyMDNSManager.cpp")
+endif()
+
+add_executable(mDNSWTestClient "src/testclient.cpp")
+target_link_libraries(mDNSWTestClient MDNSWrapper)
