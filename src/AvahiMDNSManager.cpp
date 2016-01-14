@@ -42,13 +42,14 @@ class AvahiClientError: public AvahiError
 {
 public:
     AvahiClientError(const std::string & reason, AvahiClient * client)
-        : AvahiError(formatError(reason, avahi_client_errno(client)))
+        : AvahiError(formatError(reason, client))
         , error_(avahi_client_errno(client))
     {
     }
 
     AvahiClientError(const std::string & reason, int error)
-        : AvahiError(formatError(reason, error)), error_(error)
+        : AvahiError(formatError(reason, error))
+        , error_(error)
     {
     }
 
@@ -59,6 +60,11 @@ public:
     int error()
     {
         return error_;
+    }
+
+    static std::string formatError(const std::string & what, AvahiClient *client)
+    {
+        return formatError(what, avahi_client_errno(client));
     }
 
     static std::string formatError(const std::string & what, int error)
@@ -121,213 +127,245 @@ inline const char * toAvahiStr(const std::string & str)
     return str.empty() ? 0 : str.c_str();
 }
 
-struct AvahiServiceRecord
+class AvahiPollGuard
 {
-    std::string serviceName;
-    AvahiEntryGroup *group;
-    std::vector<MDNSService> services;
-    size_t nextToRegister;
+public:
 
-    AvahiServiceRecord()
-        : serviceName(), group(0), services(), nextToRegister(0)
+    AvahiPollGuard(AvahiThreadedPoll *threadedPoll)
+        : threadedPoll_(threadedPoll)
     {
+        avahi_threaded_poll_lock(threadedPoll_);
     }
 
-    AvahiServiceRecord(const std::string &name)
-        : serviceName(name), group(0), services(), nextToRegister(0)
+    ~AvahiPollGuard()
     {
+        avahi_threaded_poll_unlock(threadedPoll_);
     }
 
-    ~AvahiServiceRecord()
-    {
-        if (group)
-        {
-            avahi_entry_group_reset(group);
-            avahi_entry_group_free(group);
-        }
-    }
-
-    void selectAlternativeServiceName()
-    {
-        char * altName = avahi_alternative_service_name(serviceName.c_str());
-        if (altName)
-        {
-            serviceName = altName;
-            avahi_free(altName);
-        }
-    }
-
-    void resetServices()
-    {
-        if (group)
-        {
-            avahi_entry_group_reset(group);
-            nextToRegister = 0;
-        }
-    }
-
-    static void entryGroupCB(AvahiEntryGroup *g, AvahiEntryGroupState state,
-    AVAHI_GCC_UNUSED void *userdata)
-    {
-        AvahiServiceRecord * self =
-                reinterpret_cast<AvahiServiceRecord*>(userdata);
-        assert(g == self->group || self->group == 0);
-
-        if (self->group == 0)
-        {
-            self->group = g;
-        }
-
-        switch (state)
-        {
-            case AVAHI_ENTRY_GROUP_ESTABLISHED:
-                /* The entry group has been established successfully */
-                //fprintf(stderr, "Service '%s' successfully established.\n", name);
-                break;
-
-            case AVAHI_ENTRY_GROUP_COLLISION:
-            {
-                /* A service name collision with a remote service
-                 * happened. Let's pick a new name */
-                self->selectAlternativeServiceName();
-                /* And recreate the services */
-                avahi_entry_group_reset(self->group);
-                self->nextToRegister = 0;
-                self->registerMissingServices(avahi_entry_group_get_client(g));
-                break;
-            }
-
-            case AVAHI_ENTRY_GROUP_FAILURE:
-                throw AvahiClientError("Entry group failure",
-                                       avahi_entry_group_get_client(g));
-            case AVAHI_ENTRY_GROUP_UNCOMMITED:
-            case AVAHI_ENTRY_GROUP_REGISTERING:
-                break;
-            default:
-                throw std::logic_error("Unexpected AvahiEntryGroupState value");
-        }
-    }
-
-    void registerMissingServices(AvahiClient *client)
-    {
-        assert(client);
-
-        if (!group)
-        {
-            if (!(group = avahi_entry_group_new(client, &entryGroupCB,
-                                                reinterpret_cast<void*>(this))))
-            {
-                throw AvahiClientError("avahi_entry_group_new() failed : ",
-                                       client);
-            }
-        }
-
-        //resetting and resubmitting all
-        if (services.size() > 0 && nextToRegister > 0)
-        {
-            avahi_entry_group_reset(group);
-            nextToRegister = 0;
-        }
-
-        bool repeatRegistration;
-        bool needToCommit;
-
-        do
-        {
-            repeatRegistration = false;
-            needToCommit = false;
-            while (nextToRegister < services.size())
-            {
-                bool noCollision = registerService(client,
-                                                   services[nextToRegister]);
-                if (noCollision)
-                {
-                    needToCommit = true;
-                }
-                else
-                {
-                    selectAlternativeServiceName();
-                    avahi_entry_group_reset(group);
-                    nextToRegister = 0;
-                    repeatRegistration = true;
-                    break;
-                }
-                ++nextToRegister;
-            }
-        } while (repeatRegistration);
-
-        if (!needToCommit)
-        {
-            return;
-        }
-
-        int res = avahi_entry_group_commit(group);
-        if (res)
-        {
-            throw AvahiClientError("avahi_entry_group_commit failed", client);
-        }
-    }
-
-    /**
-     * Returns false on collision
-     */
-    bool registerService(AvahiClient *client, const MDNSService &service)
-    {
-        assert(client);
-        assert(group);
-
-        AvahiStringList *txtRecords = toAvahiStringList(service.txtRecords);
-
-        int error = avahi_entry_group_add_service_strlst(
-                group, toAvahiIfIndex(service.interfaceIndex),
-                AVAHI_PROTO_UNSPEC, (AvahiPublishFlags) 0, serviceName.c_str(),
-                toAvahiStr(service.type), toAvahiStr(service.domain),
-                toAvahiStr(service.host), service.port, txtRecords);
-
-        avahi_string_list_free(txtRecords);
-
-        if (error == AVAHI_ERR_COLLISION)
-        {
-            return false;
-        }
-
-        if (error)
-        {
-            throw AvahiClientError(
-                    "avahi_entry_group_add_service_strlst() failed", error);
-        }
-
-        for (auto it = service.subtypes.begin(), et = service.subtypes.end();
-                it != et; ++it)
-        {
-            error = avahi_entry_group_add_service_subtype(
-                    group, toAvahiIfIndex(service.interfaceIndex),
-                    AVAHI_PROTO_UNSPEC, (AvahiPublishFlags) 0,
-                    serviceName.c_str(), toAvahiStr(service.type),
-                    toAvahiStr(service.domain), it->c_str());
-            if (error)
-            {
-                throw AvahiClientError(
-                        "avahi_entry_group_add_service_subtype() failed",
-                        error);
-            }
-        }
-        return true;
-    }
+private:
+    AvahiThreadedPoll *threadedPoll_;
 };
+
 
 } // unnamed namespace
 
 class MDNSManager::PImpl
 {
 public:
+
+    struct AvahiServiceRecord
+    {
+        std::string serviceName;
+        AvahiEntryGroup *group;
+        std::vector<MDNSService> services;
+        size_t nextToRegister;
+        MDNSManager::PImpl &pimpl;
+
+        AvahiServiceRecord(const std::string &name, MDNSManager::PImpl &pimpl)
+            : serviceName(name), group(0), services(), nextToRegister(0), pimpl(pimpl)
+        {
+        }
+
+        ~AvahiServiceRecord()
+        {
+            if (group)
+            {
+                avahi_entry_group_reset(group);
+                avahi_entry_group_free(group);
+            }
+        }
+
+        void selectAlternativeServiceName()
+        {
+            char * altName = avahi_alternative_service_name(serviceName.c_str());
+            if (altName)
+            {
+                serviceName = altName;
+                avahi_free(altName);
+            }
+        }
+
+        void resetServices()
+        {
+            if (group)
+            {
+                avahi_entry_group_reset(group);
+                nextToRegister = 0;
+            }
+        }
+
+        static void entryGroupCB(AvahiEntryGroup *g, AvahiEntryGroupState state,
+                AVAHI_GCC_UNUSED void *userdata)
+        {
+            AvahiServiceRecord * self =
+                reinterpret_cast<AvahiServiceRecord*>(userdata);
+            assert(g == self->group || self->group == 0);
+
+            if (self->group == 0)
+            {
+                self->group = g;
+            }
+
+            switch (state)
+            {
+                case AVAHI_ENTRY_GROUP_ESTABLISHED:
+                    /* The entry group has been established successfully */
+                    //fprintf(stderr, "Service '%s' successfully established.\n", name);
+                    break;
+
+                case AVAHI_ENTRY_GROUP_COLLISION:
+                {
+                    /* A service name collision with a remote service
+                     * happened. Let's pick a new name */
+                    self->selectAlternativeServiceName();
+                    /* And recreate the services */
+                    avahi_entry_group_reset(self->group);
+                    self->nextToRegister = 0;
+                    self->registerMissingServices(avahi_entry_group_get_client(g));
+                    break;
+                }
+
+                case AVAHI_ENTRY_GROUP_FAILURE:
+                    self->pimpl.avahiError("Entry group failure",
+                                     avahi_entry_group_get_client(g));
+                    avahi_threaded_poll_quit(self->pimpl.threadedPoll);
+                    break;
+                case AVAHI_ENTRY_GROUP_UNCOMMITED:
+                case AVAHI_ENTRY_GROUP_REGISTERING:
+                    break;
+                default:
+                    self->pimpl.error("Unexpected AvahiEntryGroupState value");
+            }
+        }
+
+        bool registerMissingServices(AvahiClient *client)
+        {
+            assert(client);
+
+            if (!group)
+            {
+                if (!(group = avahi_entry_group_new(client, &entryGroupCB,
+                                                    reinterpret_cast<void*>(this))))
+                {
+                    pimpl.avahiError("avahi_entry_group_new() failed : ",
+                                     client);
+                    avahi_threaded_poll_quit(pimpl.threadedPoll);
+                    return false;
+                }
+            }
+
+            //resetting and resubmitting all
+            if (services.size() > 0 && nextToRegister > 0)
+            {
+                avahi_entry_group_reset(group);
+                nextToRegister = 0;
+            }
+
+            bool repeatRegistration;
+            bool needToCommit;
+
+            do
+            {
+                repeatRegistration = false;
+                needToCommit = false;
+                while (nextToRegister < services.size())
+                {
+                    int error = registerService(client, services[nextToRegister]);
+
+                    if (error == AVAHI_OK)
+                    {
+                        needToCommit = true;
+                    }
+                    else if (error == AVAHI_ERR_COLLISION)
+                    {
+                        selectAlternativeServiceName();
+                        avahi_entry_group_reset(group);
+                        nextToRegister = 0;
+                        repeatRegistration = true;
+                        break;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                    ++nextToRegister;
+                }
+            } while (repeatRegistration);
+
+            if (!needToCommit)
+            {
+                return true;
+            }
+
+            int ret = avahi_entry_group_commit(group);
+            if (ret < 0)
+            {
+                pimpl.avahiError("Failed to commit entry group", ret);
+                avahi_threaded_poll_quit(pimpl.threadedPoll);
+                return false;
+            }
+            return true;
+        }
+
+        /**
+         * Returns avahi error code
+         */
+        int registerService(AvahiClient *client, const MDNSService &service)
+        {
+            assert(client);
+            assert(group);
+
+            AvahiStringList *txtRecords = toAvahiStringList(service.txtRecords);
+
+            int error = avahi_entry_group_add_service_strlst(
+                    group, toAvahiIfIndex(service.interfaceIndex),
+                    AVAHI_PROTO_UNSPEC, (AvahiPublishFlags) 0, serviceName.c_str(),
+                    toAvahiStr(service.type), toAvahiStr(service.domain),
+                    toAvahiStr(service.host), service.port, txtRecords);
+
+            avahi_string_list_free(txtRecords);
+
+            if (error == AVAHI_ERR_COLLISION)
+            {
+                return false;
+            }
+
+            if (error < 0)
+            {
+                pimpl.avahiError("avahi_entry_group_add_service_strlst() failed", error);
+                avahi_threaded_poll_quit(pimpl.threadedPoll);
+                return error;
+            }
+
+            for (auto it = service.subtypes.begin(), et = service.subtypes.end();
+                    it != et; ++it)
+            {
+                error = avahi_entry_group_add_service_subtype(
+                        group, toAvahiIfIndex(service.interfaceIndex),
+                        AVAHI_PROTO_UNSPEC, (AvahiPublishFlags) 0,
+                        serviceName.c_str(), toAvahiStr(service.type),
+                        toAvahiStr(service.domain), it->c_str());
+                if (error < 0)
+                {
+                    pimpl.avahiError("avahi_entry_group_add_service_subtype() failed", error);
+                    avahi_threaded_poll_quit(pimpl.threadedPoll);
+                    return error;
+                }
+            }
+            return AVAHI_OK;
+        }
+    };
+
+    typedef std::unordered_map<std::string, AvahiServiceRecord> AvahiServiceRecordMap;
+
     AvahiClient *client;
     bool clientRunning;
     AvahiThreadedPoll *threadedPoll;
-    std::unordered_map<std::string, AvahiServiceRecord> serviceRecords;
+    AvahiServiceRecordMap serviceRecords;
+    std::vector<std::string> errorLog;
 
     PImpl()
-            : client(0), clientRunning(false), threadedPoll(0), serviceRecords()
+        : client(0), clientRunning(false), threadedPoll(0), serviceRecords()
     {
         if (!(threadedPoll = avahi_threaded_poll_new()))
         {
@@ -393,8 +431,25 @@ public:
         }
     }
 
+    void error(std::string errorMsg)
+    {
+        errorLog.push_back(std::move(errorMsg));
+    }
+
+    void avahiError(const std::string & what, int errorCode)
+    {
+        std::ostringstream os;
+        os << what << " error " << errorCode << ": " << avahi_strerror(errorCode);
+        error(os.str());
+    }
+
+    void avahiError(const std::string & what, AvahiClient *client)
+    {
+        avahiError(what, avahi_client_errno(client));
+    }
+
     static void clientCB(AvahiClient *client, AvahiClientState state,
-    AVAHI_GCC_UNUSED void * userdata)
+            AVAHI_GCC_UNUSED void * userdata)
     {
         PImpl *self = (PImpl*) userdata;
 
@@ -411,7 +466,9 @@ public:
 
             case AVAHI_CLIENT_FAILURE:
             {
-                throw AvahiClientError("Had client failure", client);
+                self->avahiError("Client failure", client);
+                avahi_threaded_poll_quit(self->threadedPoll);
+                break;
             }
             case AVAHI_CLIENT_S_COLLISION:
                 /* Let's drop our registered services. When the server is back
@@ -428,15 +485,14 @@ public:
             case AVAHI_CLIENT_CONNECTING:
                 break;
             default:
-                throw std::logic_error("Unexpected AvahiClient state");
+                self->error("Unexpected AvahiClient state");
         }
-
     }
 
 };
 
 MDNSManager::MDNSManager()
-        : pimpl_(new MDNSManager::PImpl)
+    : pimpl_(new MDNSManager::PImpl)
 {
 }
 
@@ -461,17 +517,34 @@ void MDNSManager::stop()
 
 void MDNSManager::registerService(MDNSService service)
 {
-    avahi_threaded_poll_lock(pimpl_->threadedPoll);
+    AvahiPollGuard g(pimpl_->threadedPoll);
 
-    AvahiServiceRecord &serviceRec = pimpl_->serviceRecords[service.name];
-    if (serviceRec.serviceName.empty())
+    MDNSManager::PImpl::AvahiServiceRecord *serviceRec = 0;
+    auto it = pimpl_->serviceRecords.find(service.name);
+    if (it != pimpl_->serviceRecords.end())
     {
-        serviceRec.serviceName = service.name;
+        serviceRec = &it->second;
     }
-    serviceRec.services.push_back(std::move(service));
-    pimpl_->registerMissingServices(pimpl_->client);
+    else
+    {
+        serviceRec = &pimpl_->serviceRecords.insert(
+            std::make_pair(service.name,
+                MDNSManager::PImpl::AvahiServiceRecord(service.name, *pimpl_))).first->second;
+    }
 
-    avahi_threaded_poll_unlock(pimpl_->threadedPoll);
+    serviceRec->services.push_back(std::move(service));
+    pimpl_->registerMissingServices(pimpl_->client);
+}
+
+std::vector<std::string> MDNSManager::getErrorLog()
+{
+
+    std::vector<std::string> result;
+    {
+        AvahiPollGuard g(pimpl_->threadedPoll);
+        result.swap(pimpl_->errorLog);
+    }
+    return result;
 }
 
 } // namespace MDNS

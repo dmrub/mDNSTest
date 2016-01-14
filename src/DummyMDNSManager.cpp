@@ -33,4 +33,23 @@ void MDNSManager::stop()
 {
 }
 
+void MDNSManager::registerService(MDNSService service);
+
+void MDNSManager::registerServiceBrowser(MDNSInterfaceIndex interfaceIndex,
+                                         const std::string &type,
+                                         const std::string &domain,
+                                         const MDNSServiceBrowser::Ptr & browser)
+{
+}
+
+void MDNSManager::unregisterServiceBrowser(const MDNSServiceBrowser::Ptr & browser)
+{
+}
+
+std::vector<std::string> MDNSManager::getErrorLog()
+{
+    std::vector<std::string> dummy;
+    return dummy;
+}
+
 } // namespace MDNS

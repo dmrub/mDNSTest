@@ -114,9 +114,28 @@ public:
 
 };
 
+class MDNSServiceBrowser
+{
+public:
+
+    typedef std::shared_ptr<MDNSServiceBrowser> Ptr;
+
+    virtual void onNewService(const MDNSService &service) { }
+
+    virtual void onDeletedService(const std::string &name, const std::string &domain, const std::string &type) { }
+
+    virtual ~MDNSServiceBrowser() { }
+};
+
 class MDNSManager
 {
 public:
+
+    typedef std::function<void (const MDNSService & s)> NewServiceCallback;
+
+    typedef std::function<void (const std::string & name,
+                                const std::string & domain,
+                                const std::string & type)> DeletedServiceCallback;
 
     MDNSManager();
 
@@ -127,6 +146,26 @@ public:
     void stop();
 
     void registerService(MDNSService service);
+
+    /**
+     * Register service browser for services on specified interface index,
+     * service type, and domain.
+     * Browser handler methods are called in event loop thread.
+     */
+    void registerServiceBrowser(MDNSInterfaceIndex interfaceIndex,
+                                const std::string &type,
+                                const std::string &domain,
+                                const MDNSServiceBrowser::Ptr & browser);
+
+    /**
+     * Unregister service
+     */
+    void unregisterServiceBrowser(const MDNSServiceBrowser::Ptr & browser);
+
+    /**
+     * Returns all error messages collected from last call to getErrorLog().
+     */
+    std::vector<std::string> getErrorLog();
 
     static bool isAvailable();
 
