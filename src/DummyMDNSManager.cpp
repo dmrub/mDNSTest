@@ -10,8 +10,10 @@
 namespace MDNS
 {
 
+class MDNSManager::PImpl { };
+
 MDNSManager::MDNSManager()
-    : pimpl_(0)
+    : pimpl_(static_cast<MDNSManager::PImpl*>(0))
 {
     throw std::logic_error("No MDNS support available");
 }
@@ -33,7 +35,10 @@ void MDNSManager::stop()
 {
 }
 
-void MDNSManager::registerService(MDNSService service);
+void MDNSManager::registerService(MDNSService service)
+{
+
+}
 
 void MDNSManager::registerServiceBrowser(MDNSInterfaceIndex interfaceIndex,
                                          const std::string &type,
