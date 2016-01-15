@@ -4,19 +4,28 @@
  *  Created on: Jan 12, 2016
  *      Author: Dmitri Rubinstein
  */
-#include "MDNSManager.hpp"
-#include <avahi-common/error.h>
-#include <avahi-common/thread-watch.h>
-#include <avahi-common/malloc.h>
-#include <avahi-common/alternative.h>
-#include <avahi-client/client.h>
-#include <avahi-client/publish.h>
 
-#include <string>
-#include <stdexcept>
-#include <sstream>
+#include "MDNSManager.hpp"
+
+#include <cstddef>
 #include <cassert>
+#include <memory>
+#include <sstream>
+#include <stdexcept>
 #include <unordered_map>
+#include <utility>
+
+#include <avahi-client/client.h>
+#include <avahi-client/lookup.h>
+#include <avahi-client/publish.h>
+#include <avahi-common/address.h>
+#include <avahi-common/alternative.h>
+#include <avahi-common/defs.h>
+#include <avahi-common/error.h>
+#include <avahi-common/gccmacro.h>
+#include <avahi-common/malloc.h>
+#include <avahi-common/strlst.h>
+#include <avahi-common/thread-watch.h>
 
 namespace MDNS
 {
@@ -108,7 +117,7 @@ AvahiStringList * toAvahiStringList(const std::vector<std::string> & data)
     return list;
 }
 
-std::vector<std::string> fromAvahiStrList(AvahiStringList * list)
+std::vector<std::string> fromAvahiStringList(AvahiStringList * list)
 {
     std::vector < std::string > res;
 
@@ -125,6 +134,11 @@ std::vector<std::string> fromAvahiStrList(AvahiStringList * list)
 inline const char * toAvahiStr(const std::string & str)
 {
     return str.empty() ? 0 : str.c_str();
+}
+
+inline std::string fromAvahiStr(const char *str)
+{
+    return str ? str : "";
 }
 
 class AvahiPollGuard
@@ -144,6 +158,23 @@ public:
 
 private:
     AvahiThreadedPoll *threadedPoll_;
+};
+
+class ServiceResolverGuard
+{
+public:
+    ServiceResolverGuard(AvahiServiceResolver *resolver)
+        : resolver_(resolver)
+    {
+    }
+
+    ~ServiceResolverGuard()
+    {
+        avahi_service_resolver_free(resolver_);
+    }
+
+private:
+    AvahiServiceResolver *resolver_;
 };
 
 
@@ -177,11 +208,20 @@ public:
 
         void selectAlternativeServiceName()
         {
-            char * altName = avahi_alternative_service_name(serviceName.c_str());
+            std::string oldName = std::move(serviceName);
+            char * altName = avahi_alternative_service_name(oldName.c_str());
             if (altName)
             {
                 serviceName = altName;
                 avahi_free(altName);
+                if (pimpl.alternativeServiceNameHandler)
+                    pimpl.alternativeServiceNameHandler(serviceName, oldName);
+            }
+            else
+            {
+                serviceName = std::move(oldName);
+                if (pimpl.alternativeServiceNameHandler)
+                    pimpl.alternativeServiceNameHandler(serviceName, serviceName);
             }
         }
 
@@ -358,10 +398,133 @@ public:
 
     typedef std::unordered_map<std::string, AvahiServiceRecord> AvahiServiceRecordMap;
 
+    struct AvahiBrowserRecord
+    {
+        MDNSServiceBrowser::Ptr handler;
+        std::vector<AvahiServiceBrowser *> serviceBrowsers;
+        MDNSManager::PImpl &pimpl;
+
+        AvahiBrowserRecord(const MDNSServiceBrowser::Ptr &handler, MDNSManager::PImpl &pimpl)
+            : handler(handler), serviceBrowsers(), pimpl(pimpl)
+        { }
+
+        ~AvahiBrowserRecord()
+        {
+            for (auto it = serviceBrowsers.begin(), iend = serviceBrowsers.end(); it != iend; ++it)
+            {
+                avahi_service_browser_free(*it);
+            }
+        }
+
+        static void resolveCB(
+                AvahiServiceResolver *r,
+                AVAHI_GCC_UNUSED AvahiIfIndex interface,
+                AVAHI_GCC_UNUSED AvahiProtocol protocol,
+                AvahiResolverEvent event,
+                const char *name,
+                const char *type,
+                const char *domain,
+                const char *host_name,
+                const AvahiAddress *address,
+                uint16_t port,
+                AvahiStringList *txt,
+                AvahiLookupResultFlags flags,
+                AVAHI_GCC_UNUSED void* userdata)
+        {
+            assert(r);
+            ServiceResolverGuard g(r);
+
+            /* Called whenever a service has been resolved successfully or timed out */
+
+            AvahiBrowserRecord * self =
+                reinterpret_cast<AvahiBrowserRecord*>(userdata);
+            AvahiClient * client = avahi_service_resolver_get_client(r);
+
+            switch (event)
+            {
+                case AVAHI_RESOLVER_FAILURE:
+                    self->pimpl.avahiError("Failed to resolve service '"+fromAvahiStr(name)+
+                                           "' of type '"+fromAvahiStr(type)+
+                                           "' in domain '"+fromAvahiStr(domain)+"'", client);
+                    break;
+
+                case AVAHI_RESOLVER_FOUND:
+                {
+                    MDNSService service;
+                    service.interfaceIndex = fromAvahiIfIndex(interface);
+                    service.name = fromAvahiStr(name);
+                    service.type = fromAvahiStr(type);
+                    service.domain = fromAvahiStr(domain);
+                    service.host = fromAvahiStr(host_name);
+                    service.port = port;
+                    service.txtRecords = fromAvahiStringList(txt);
+
+                    if (self->handler)
+                        self->handler->onNewService(service);
+                }
+            }
+        }
+
+        static void browseCB(
+            AvahiServiceBrowser *b,
+            AvahiIfIndex interface,
+            AvahiProtocol protocol,
+            AvahiBrowserEvent event,
+            const char *name,
+            const char *type,
+            const char *domain,
+            AVAHI_GCC_UNUSED AvahiLookupResultFlags flags,
+            void* userdata)
+        {
+            AvahiBrowserRecord * self =
+                reinterpret_cast<AvahiBrowserRecord*>(userdata);
+            AvahiClient * client = avahi_service_browser_get_client(b);
+            switch (event)
+            {
+                case AVAHI_BROWSER_FAILURE:
+
+                    self->pimpl.avahiError("Browser failure", client);
+                    avahi_threaded_poll_quit(self->pimpl.threadedPoll);
+                    return;
+
+                case AVAHI_BROWSER_NEW:
+                    //fprintf(stderr, "(Browser) NEW: service '%s' of type '%s' in domain '%s'\n", name, type, domain);
+
+                    /* We ignore the returned resolver object. In the callback
+                       function we free it. If the server is terminated before
+                       the callback function is called the server will free
+                       the resolver for us. */
+
+                    if (!(avahi_service_resolver_new(client, interface, protocol, name, type, domain, AVAHI_PROTO_UNSPEC,
+                                                     (AvahiLookupFlags)0, resolveCB, userdata)))
+                        self->pimpl.avahiError("Failed to resolve service '" + fromAvahiStr(name) + "'", client);
+                    break;
+
+                case AVAHI_BROWSER_REMOVE:
+                    //fprintf(stderr, "(Browser) REMOVE: service '%s' of type '%s' in domain '%s'\n", name, type, domain);
+                    if (self->handler)
+                        self->handler->onRemovedService(fromAvahiStr(name), fromAvahiStr(type), fromAvahiStr(domain));
+                    break;
+
+                case AVAHI_BROWSER_ALL_FOR_NOW:
+                case AVAHI_BROWSER_CACHE_EXHAUSTED:
+                    //fprintf(stderr, "(Browser) %s\n", event == AVAHI_BROWSER_CACHE_EXHAUSTED ? "CACHE_EXHAUSTED" : "ALL_FOR_NOW");
+                    break;
+            }
+
+        }
+    };
+
+    typedef std::unordered_map<MDNSServiceBrowser::Ptr, AvahiBrowserRecord> AvahiBrowserRecordMap;
+
     AvahiClient *client;
     bool clientRunning;
     AvahiThreadedPoll *threadedPoll;
+    MDNSManager::AlternativeServiceNameHandler alternativeServiceNameHandler;
+    MDNSManager::ErrorHandler errorHandler;
+
     AvahiServiceRecordMap serviceRecords;
+    AvahiBrowserRecordMap browserRecords;
     std::vector<std::string> errorLog;
 
     PImpl()
@@ -386,15 +549,12 @@ public:
     ~PImpl()
     {
         stop();
+
+        // Remove all browser and service records before freeing client
+        // otherwise group and browser pointers are invalidated
+        serviceRecords.clear();
+        browserRecords.clear();
         avahi_client_free(client);
-
-        for (auto it = serviceRecords.begin(), eit = serviceRecords.end();
-                it != eit; ++it)
-        {
-            // group pointer is destroyed by avahi_client_free
-            it->second.group = 0;
-        }
-
         avahi_threaded_poll_free(threadedPoll);
     }
 
@@ -433,6 +593,8 @@ public:
 
     void error(std::string errorMsg)
     {
+        if (errorHandler)
+            errorHandler(errorMsg);
         errorLog.push_back(std::move(errorMsg));
     }
 
@@ -515,25 +677,80 @@ void MDNSManager::stop()
     pimpl_->stop();
 }
 
+void MDNSManager::setAlternativeServiceNameHandler(MDNSManager::AlternativeServiceNameHandler handler)
+{
+    AvahiPollGuard g(pimpl_->threadedPoll);
+    pimpl_->alternativeServiceNameHandler = handler;
+}
+
+void MDNSManager::setErrorHandler(MDNSManager::ErrorHandler handler)
+{
+    AvahiPollGuard g(pimpl_->threadedPoll);
+    pimpl_->errorHandler = handler;
+}
+
 void MDNSManager::registerService(MDNSService service)
 {
     AvahiPollGuard g(pimpl_->threadedPoll);
 
     MDNSManager::PImpl::AvahiServiceRecord *serviceRec = 0;
     auto it = pimpl_->serviceRecords.find(service.name);
-    if (it != pimpl_->serviceRecords.end())
+    if (it == pimpl_->serviceRecords.end())
     {
-        serviceRec = &it->second;
+        it = pimpl_->serviceRecords.insert(
+                std::make_pair(service.name,
+                    MDNSManager::PImpl::AvahiServiceRecord(service.name, *pimpl_))).first;
     }
-    else
-    {
-        serviceRec = &pimpl_->serviceRecords.insert(
-            std::make_pair(service.name,
-                MDNSManager::PImpl::AvahiServiceRecord(service.name, *pimpl_))).first->second;
-    }
+    serviceRec = &it->second;
 
     serviceRec->services.push_back(std::move(service));
     pimpl_->registerMissingServices(pimpl_->client);
+}
+
+void MDNSManager::registerServiceBrowser(MDNSInterfaceIndex interfaceIndex,
+                                         const std::string &type,
+                                         const std::string &domain,
+                                         const MDNSServiceBrowser::Ptr & browser)
+{
+    if (type.empty())
+        throw std::logic_error("type argument can't be empty");
+
+    AvahiPollGuard g(pimpl_->threadedPoll);
+
+    MDNSManager::PImpl::AvahiBrowserRecord *browserRec = 0;
+    auto it = pimpl_->browserRecords.find(browser);
+    if (it == pimpl_->browserRecords.end())
+    {
+        it = pimpl_->browserRecords.insert(
+                std::make_pair(browser,
+                    MDNSManager::PImpl::AvahiBrowserRecord(browser, *pimpl_))).first;
+    }
+    browserRec = &it->second;
+
+    AvahiServiceBrowser *sb = avahi_service_browser_new(pimpl_->client,
+                                                        toAvahiIfIndex(interfaceIndex),
+                                                        AVAHI_PROTO_UNSPEC,
+                                                        toAvahiStr(type),
+                                                        toAvahiStr(domain),
+                                                        (AvahiLookupFlags)0,
+                                                        MDNSManager::PImpl::AvahiBrowserRecord::browseCB,
+                                                        browserRec);
+
+    if (!sb)
+    {
+        // remove empty records
+        if (browserRec->serviceBrowsers.empty())
+            pimpl_->browserRecords.erase(it);
+        throw AvahiClientError("avahi_service_browser_new() failed", pimpl_->client);
+    }
+    browserRec->serviceBrowsers.push_back(sb);
+}
+
+void MDNSManager::unregisterServiceBrowser(const MDNSServiceBrowser::Ptr & browser)
+{
+    AvahiPollGuard g(pimpl_->threadedPoll);
+
+    pimpl_->browserRecords.erase(browser);
 }
 
 std::vector<std::string> MDNSManager::getErrorLog()

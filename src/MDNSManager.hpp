@@ -122,7 +122,7 @@ public:
 
     virtual void onNewService(const MDNSService &service) { }
 
-    virtual void onDeletedService(const std::string &name, const std::string &domain, const std::string &type) { }
+    virtual void onRemovedService(const std::string &name, const std::string &type, const std::string &domain) { }
 
     virtual ~MDNSServiceBrowser() { }
 };
@@ -131,11 +131,9 @@ class MDNSManager
 {
 public:
 
-    typedef std::function<void (const MDNSService & s)> NewServiceCallback;
+    typedef std::function<void (const std::string &newName, const std::string &oldName)> AlternativeServiceNameHandler;
 
-    typedef std::function<void (const std::string & name,
-                                const std::string & domain,
-                                const std::string & type)> DeletedServiceCallback;
+    typedef std::function<void (const std::string &errorMsg)> ErrorHandler;
 
     MDNSManager();
 
@@ -144,6 +142,16 @@ public:
     void run();
 
     void stop();
+
+    /**
+     * Register handler for service name changes due to conflicts. Handler is executed in the event loop thread.
+     */
+    void setAlternativeServiceNameHandler(AlternativeServiceNameHandler handler);
+
+    /**
+     * Register handler for errors. Handler is executed in the event loop thread.
+     */
+    void setErrorHandler(ErrorHandler handler);
 
     void registerService(MDNSService service);
 
