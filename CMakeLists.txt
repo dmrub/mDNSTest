@@ -51,8 +51,6 @@ find_package(Threads REQUIRED)
 find_package(Bonjour)
 find_package(Avahi)
 
-
-
 if (BONJOUR_FOUND)
   include_directories(${BONJOUR_INCLUDE_DIR})
 
@@ -77,7 +75,8 @@ if (AVAHI_FOUND)
     add_library(MDNSWrapper "src/AvahiMDNSManager.cpp")
     target_link_libraries(MDNSWrapper ${AVAHI_LIBRARIES})
 elseif(BONJOUR_FOUND)
-
+    add_library(MDNSWrapper "src/BonjourMDNSManager.cpp")
+    target_link_libraries(MDNSWrapper ${BONJOUR_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
 else()
     add_library(MDNSWrapper "src/DummyMDNSManager.cpp")
 endif()

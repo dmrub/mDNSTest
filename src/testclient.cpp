@@ -72,4 +72,6 @@ int main(int argc, char **argv)
     mgr.registerService(s);
 
     std::cin.get();
+
+    std::cout<<"Exiting"<<std::endl;
 }
