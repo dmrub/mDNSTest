@@ -251,6 +251,9 @@ public:
             fd_set readfds;
             fd_set* nullFd = (fd_set*) 0;
 
+            // 1. Set up the fd_set as usual here.
+            FD_ZERO(&readfds);
+
             for (auto it = localRefs.begin(), iend = localRefs.end(); it != iend; ++it)
             {
                 int fd  = DNSServiceRefSockFD(*it);
