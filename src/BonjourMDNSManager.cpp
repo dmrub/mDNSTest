@@ -11,8 +11,6 @@
 #include <process.h>
 typedef int pid_t;
 #define getpid _getpid
-#define strcasecmp _stricmp
-#define snprintf _snprintf
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #pragma comment(lib, "Ws2_32.lib")
@@ -33,11 +31,12 @@ typedef int pid_t;
 #include <cstddef>
 #include <cassert>
 #include <cstdint>
-#include <cstdio>
+#include <cctype>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
+#include <algorithm>
 #include <utility>
 
 #include <iostream>
@@ -47,6 +46,32 @@ namespace MDNS
 
 namespace
 {
+
+inline bool strEndsWith(const std::string &str, const std::string &strEnd)
+{
+    if (strEnd.size() > str.size())
+        return false;
+    if (strEnd.size() == str.size())
+        return strEnd == str;
+    std::string::const_reverse_iterator i = str.rbegin();
+    std::string::const_reverse_iterator i1 = strEnd.rbegin();
+    while (i1 != strEnd.rend())
+    {
+        if (*i != *i1)
+            return false;
+        ++i;
+        ++i1;
+    }
+    return true;
+}
+
+inline void removeTrailingDot(std::string &str)
+{
+    if (str.length() > 0 && str[str.length()-1] == '.')
+    {
+        str.resize(str.length()-1);
+    }
+}
 
 inline uint32_t toDnsSdInterfaceIndex(MDNSInterfaceIndex i)
 {
@@ -102,6 +127,73 @@ std::string encodeTxtRecordData(const std::vector<std::string> & fields, bool & 
     return str;
 }
 
+std::vector<std::string> decodeTxtRecordData(uint16_t txtLen, const unsigned char *txtRecord)
+{
+    std::vector<std::string> res;
+    const unsigned char *cur = txtRecord;
+    uint16_t i = 0;
+    while (i < txtLen)
+    {
+        std::string::size_type len = static_cast<std::string::size_type>(*cur);
+        if (len == 0)
+            break;
+        res.emplace_back(reinterpret_cast<const char*>(cur+1), len);
+        cur += 1 + len;
+        i += 1 + len;
+    }
+    return res;
+}
+
+std::string decodeDNSName(const std::string &str)
+{
+    std::string res;
+    res.reserve(str.size()+2);
+    for (std::string::const_iterator it = str.begin(), iend = str.end(); it != iend; ++it)
+    {
+        const char c = (*it);
+        if (c == '\\')
+        {
+            if (++it == iend)
+                break;
+            const char c1 = *it;
+            if (isdigit(c1))
+            {
+                if (++it == iend)
+                    break;
+                const char c2 = *it;
+                if (isdigit(c2))
+                {
+                    if (++it == iend)
+                        break;
+                    const char c3 = *it;
+                    if (isdigit(c3))
+                    {
+                        const char num[4] = {c1, c2, c3, '\0'};
+                        res += static_cast<char>(atoi(num));
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+                else
+                {
+                    break;
+                }
+            }
+            else
+            {
+                res += c1;
+            }
+        }
+        else
+        {
+            res += c;
+        }
+    }
+    return res;
+}
+
 const char * getDnsSdErrorName(DNSServiceErrorType error)
 {
     switch (error)
@@ -147,67 +239,35 @@ public:
     }
 };
 
-#if 0
-
-class AvahiClientError: public AvahiError
-{
-public:
-    AvahiClientError(const std::string & reason, AvahiClient * client)
-        : AvahiError(formatError(reason, client))
-        , error_(avahi_client_errno(client))
-    {
-    }
-
-    AvahiClientError(const std::string & reason, int error)
-        : AvahiError(formatError(reason, error))
-        , error_(error)
-    {
-    }
-
-    virtual ~AvahiClientError() noexcept
-    {
-    }
-
-    int error()
-    {
-        return error_;
-    }
-
-    static std::string formatError(const std::string & what, AvahiClient *client)
-    {
-        return formatError(what, avahi_client_errno(client));
-    }
-
-    static std::string formatError(const std::string & what, int error)
-    {
-        std::ostringstream os;
-        os << what << " error " << error << ": " << avahi_strerror(error);
-        return os.str();
-    }
-
-private:
-    int error_;
-};
-#endif
-
-template <class T>
-class FlagGuard
+class DNSServiceRefWrapper
 {
 public:
 
-    FlagGuard(T &flag)
-        : flag_(flag)
+    DNSServiceRef serviceRef;
+
+    DNSServiceRefWrapper(DNSServiceRef serviceRef)
+        : serviceRef(serviceRef)
+    { }
+
+    DNSServiceRefWrapper(const DNSServiceRefWrapper &other) = delete;
+
+    DNSServiceRefWrapper(DNSServiceRefWrapper &&other)
+        : serviceRef(other.release())
     {
-        flag_ = true;
     }
 
-    ~FlagGuard()
+    DNSServiceRef release()
     {
-        flag_ = false;
+        DNSServiceRef tmp = serviceRef;
+        serviceRef = (DNSServiceRef)0;
+        return tmp;
     }
 
-private:
-    T &flag_;
+    ~DNSServiceRefWrapper()
+    {
+        if (serviceRef)
+            DNSServiceRefDeallocate(serviceRef);
+    }
 };
 
 
@@ -222,6 +282,124 @@ public:
     std::atomic<bool> processEvents;
     std::vector<DNSServiceRef> serviceRefs;
 
+    struct BrowserRecord
+    {
+        MDNSServiceBrowser::Ptr handler;
+        DNSServiceRef serviceRef;
+        MDNSManager::PImpl &pimpl;
+
+        BrowserRecord(const MDNSServiceBrowser::Ptr &handler, MDNSManager::PImpl &pimpl)
+            : handler(handler), serviceRef(0), pimpl(pimpl)
+        { }
+
+        struct ResolveRecord
+        {
+            std::string type;
+            std::string domain;
+            BrowserRecord *parent;
+
+            ResolveRecord(BrowserRecord *parent, std::string &&type, std::string &&domain)
+                : type(std::move(type)), domain(std::move(domain)), parent(parent)
+            {
+            }
+        };
+
+        /**
+         * browse callback
+         */
+        static void DNSSD_API browseCB(
+                DNSServiceRef sdRef,
+                DNSServiceFlags flags,
+                uint32_t interfaceIndex,
+                DNSServiceErrorType errorCode,
+                const char *serviceName,
+                const char *regtype,
+                const char *replyDomain,
+                void *context )
+        {
+            BrowserRecord *self = static_cast<BrowserRecord*>(context);
+            if (flags & kDNSServiceFlagsAdd)
+            {
+                DNSServiceRef resolveRef;
+                ResolveRecord *rr = new ResolveRecord(self, toDnsSdStr(regtype), toDnsSdStr(replyDomain));
+                DNSServiceErrorType errorCode =
+                    DNSServiceResolve(&resolveRef,
+                                       (DNSServiceFlags)0,
+                                       interfaceIndex,
+                                       serviceName,
+                                       regtype,
+                                       replyDomain,
+                                       &resolveCB,
+                                       rr);
+
+                if (errorCode == kDNSServiceErr_NoError)
+                {
+                    self->pimpl.addServiceRef(resolveRef);
+                }
+                else
+                {
+                    delete rr;
+                    self->pimpl.error(std::string("DNSServiceResolve: ")+getDnsSdErrorName(errorCode));
+                }
+            }
+            else
+            {
+                if (self->handler)
+                    self->handler->onRemovedService(serviceName, regtype, replyDomain);
+            }
+        }
+
+        static void DNSSD_API resolveCB(DNSServiceRef sdRef,
+                DNSServiceFlags flags,
+                uint32_t interfaceIndex,
+                DNSServiceErrorType errorCode,
+                const char *fullname,
+                const char *hosttarget,
+                uint16_t port, /* In network byte order */
+                uint16_t txtLen,
+                const unsigned char *txtRecord,
+                void *context )
+        {
+            ResolveRecord *rr = static_cast<ResolveRecord*>(context);
+            BrowserRecord *self = static_cast<BrowserRecord*>(rr->parent);
+
+            MDNSService service;
+            service.interfaceIndex = fromDnsSdInterfaceIndex(interfaceIndex);
+
+            std::string name = decodeDNSName(fromDnsSdStr(fullname));
+            std::string suffix = std::string(".") + rr->type + rr->domain;
+            std::string host = fromDnsSdStr(hosttarget);
+
+            if (strEndsWith(name, suffix))
+            {
+                name.resize(name.length()-suffix.length());
+            }
+
+            // remove trailing '.'
+            removeTrailingDot(rr->type);
+            removeTrailingDot(rr->domain);
+            removeTrailingDot(host);
+
+            service.name = std::move(name);
+            service.type = std::move(rr->type);
+            service.domain = std::move(rr->domain);
+            service.host = std::move(host);
+            service.port = port;
+            service.txtRecords = decodeTxtRecordData(txtLen, txtRecord);
+
+            delete rr;
+
+            if (self->handler)
+                self->handler->onNewService(service);
+
+            self->pimpl.removeServiceRef(sdRef);
+        }
+
+    };
+
+    typedef std::unordered_multimap<MDNSServiceBrowser::Ptr, std::unique_ptr<BrowserRecord> > BrowserRecordMap;
+    BrowserRecordMap browserRecordMap;
+
     MDNSManager::AlternativeServiceNameHandler alternativeServiceNameHandler;
     MDNSManager::ErrorHandler errorHandler;
     std::vector<std::string> errorLog;
@@ -234,11 +412,18 @@ public:
     ~PImpl()
     {
         stop();
+        for (auto it = serviceRefs.begin(), eit = serviceRefs.end(); it != eit; ++it)
+        {
+            DNSServiceRefDeallocate(*it);
+        }
     }
 
     void eventLoop()
     {
         std::vector<DNSServiceRef> localRefs;
+        fd_set readfds;
+        struct timeval tv;
+
         while (processEvents)
         {
 
@@ -248,8 +433,6 @@ public:
             }
 
             int maxFD = 0;
-            fd_set readfds;
-            fd_set* nullFd = (fd_set*) 0;
 
             // 1. Set up the fd_set as usual here.
             FD_ZERO(&readfds);
@@ -270,12 +453,11 @@ public:
             int nfds = maxFD + 1;
 
             // 3. Set up the timeout.
-            struct timeval tv;
             tv.tv_sec = 1; // wakes up every 1 sec if no socket activity occurs
             tv.tv_usec = 0;
 
             // wait for pending data or 5 secs to elapse:
-            int result = select(nfds, &readfds, nullFd, nullFd, &tv);
+            int result = select(nfds, &readfds, (fd_set*) 0, (fd_set*) 0, &tv);
             if (result > 0)
             {
                 for (auto it = localRefs.begin(), iend = localRefs.end(); it != iend; ++it)
@@ -286,8 +468,7 @@ public:
                         DNSServiceErrorType err = DNSServiceProcessResult(*it);
                         if (err != kDNSServiceErr_NoError)
                         {
-                            fprintf(stderr,
-                                "DNSServiceProcessResult returned %d\n", err);
+                            error(std::string("DNSServiceProcessResult returned ")+getDnsSdErrorName(err));
                         }
                     }
                 }
@@ -298,62 +479,11 @@ public:
             }
             else
             {
-                printf("select() returned %d errno %d %s\n",
-                    result, errno, strerror(errno));
+                error(std::string("select() returned ")+std::to_string(result)+" errno "+
+                      std::to_string(errno)+" "+strerror(errno));
             }
 
             std::this_thread::yield();
-        }
-    }
-
-    static void handleEvents(DNSServiceRef serviceRef)
-    {
-        int fd  = DNSServiceRefSockFD(serviceRef);
-        int nfds = fd + 1;
-        fd_set readfds;
-        fd_set* nullFd = (fd_set*) 0;
-        struct timeval tv;
-        int result;
-        bool stopNow = false;
-
-        while (!stopNow)
-        {
-            // 1. Set up the fd_set as usual here.
-            FD_ZERO(&readfds);
-
-            // 2. Add the fd to the fd_set
-            FD_SET(fd , &readfds);
-
-            // 3. Set up the timeout.
-            tv.tv_sec = 1; // wakes up every 5 sec if no socket activity occurs
-            tv.tv_usec = 0;
-
-            // wait for pending data or 5 secs to elapse:
-            result = select(nfds, &readfds, nullFd, nullFd, &tv);
-            if (result > 0)
-            {
-                DNSServiceErrorType err = kDNSServiceErr_NoError;
-                if (FD_ISSET(fd , &readfds))
-                {
-                    err = DNSServiceProcessResult(serviceRef);
-                }
-                if (err != kDNSServiceErr_NoError)
-                {
-                    fprintf(stderr,
-                        "DNSServiceProcessResult returned %d\n", err);
-                    stopNow = true;
-                }
-            }
-            else if (result == 0)
-            {
-                // timeout elapsed but no fd-s were signalled.
-            }
-            else
-            {
-                printf("select() returned %d errno %d %s\n",
-                    result, errno, strerror(errno));
-                stopNow = (errno != EINTR);
-            }
         }
     }
 
@@ -379,20 +509,24 @@ public:
 
     void error(std::string errorMsg)
     {
+        std::lock_guard<std::mutex> g(mutex);
+
         if (errorHandler)
             errorHandler(errorMsg);
         errorLog.push_back(std::move(errorMsg));
     }
 
-    static void DNSSD_API registerCallback(
+    /**
+     * register callback
+     */
+    static void DNSSD_API registerCB(
         DNSServiceRef                       sdRef,
         DNSServiceFlags                     flags,
         DNSServiceErrorType                 errorCode,
         const char                          *name,
         const char                          *regtype,
         const char                          *domain,
-        void                                *context
-        )
+        void                                *context )
     {
         // This is the asynchronous callback
         // Can be used to handle async. errors, get data from instantiated service or record references, etc.
@@ -402,10 +536,37 @@ public:
         std::cerr<<"REGISTER CALLBACK "<<name<<std::endl;
     }
 
+
     void addServiceRef(DNSServiceRef serviceRef)
     {
         std::lock_guard<std::mutex> g(mutex);
         serviceRefs.push_back(serviceRef);
+    }
+
+    void removeServiceRef(DNSServiceRef serviceRef)
+    {
+        std::lock_guard<std::mutex> g(mutex);
+        serviceRefs.erase( std::remove( serviceRefs.begin(), serviceRefs.end(), serviceRef ), serviceRefs.end() );
+        DNSServiceRefDeallocate(serviceRef);
+    }
+
+    void addBrowserRecord(std::unique_ptr<BrowserRecord> brec)
+    {
+        std::lock_guard<std::mutex> g(mutex);
+        serviceRefs.push_back(brec->serviceRef);
+        browserRecordMap.insert(std::make_pair(brec->handler, std::move(brec)));
+    }
+
+    void removeBrowser(const MDNSServiceBrowser::Ptr & browser)
+    {
+        std::lock_guard<std::mutex> g(mutex);
+        auto range = browserRecordMap.equal_range(browser);
+        for (auto it = range.first, eit = range.second; it != eit; ++it)
+        {
+            serviceRefs.erase( std::remove( serviceRefs.begin(), serviceRefs.end(), it->second->serviceRef ), serviceRefs.end() );
+            DNSServiceRefDeallocate(it->second->serviceRef);
+        }
+        browserRecordMap.erase(browser);
     }
 
 };
@@ -468,11 +629,11 @@ void MDNSManager::registerService(MDNSService service)
                            service.port,
                            txtRecordData.empty() ? 0 : txtRecordData.length()+1,
                            txtRecordData.empty() ? NULL : txtRecordData.c_str(),
-                           &MDNSManager::PImpl::registerCallback, // callback pointer, called upon return from API
+                           &MDNSManager::PImpl::registerCB, // callback pointer, called upon return from API
                            pimpl_.get());
 
     if (errorCode != kDNSServiceErr_NoError)
-        throw DnsSdError(getDnsSdErrorName(errorCode));
+        throw DnsSdError(std::string("DNSServiceRegister: ")+getDnsSdErrorName(errorCode));
 
     pimpl_->addServiceRef(sdRef);
 }
@@ -482,49 +643,29 @@ void MDNSManager::registerServiceBrowser(MDNSInterfaceIndex interfaceIndex,
                                          const std::string &domain,
                                          const MDNSServiceBrowser::Ptr & browser)
 {
-#if 0
     if (type.empty())
         throw std::logic_error("type argument can't be empty");
 
-    AvahiPollGuard g(pimpl_->threadedPoll);
+    std::unique_ptr<MDNSManager::PImpl::BrowserRecord> brec(new MDNSManager::PImpl::BrowserRecord(browser, *pimpl_));
 
-    MDNSManager::PImpl::AvahiBrowserRecord *browserRec = 0;
-    auto it = pimpl_->browserRecords.find(browser);
-    if (it == pimpl_->browserRecords.end())
-    {
-        it = pimpl_->browserRecords.insert(
-                std::make_pair(browser,
-                    MDNSManager::PImpl::AvahiBrowserRecord(browser, *pimpl_))).first;
-    }
-    browserRec = &it->second;
+    DNSServiceErrorType errorCode =
+        DNSServiceBrowse(&brec->serviceRef,
+                         (DNSServiceFlags)0,
+                         toDnsSdInterfaceIndex(interfaceIndex),
+                         toDnsSdStr(type),
+                         toDnsSdStr(domain),
+                         &MDNSManager::PImpl::BrowserRecord::browseCB,
+                         brec.get());
 
-    AvahiServiceBrowser *sb = avahi_service_browser_new(pimpl_->client,
-                                                        toAvahiIfIndex(interfaceIndex),
-                                                        AVAHI_PROTO_UNSPEC,
-                                                        toAvahiStr(type),
-                                                        toAvahiStr(domain),
-                                                        (AvahiLookupFlags)0,
-                                                        MDNSManager::PImpl::AvahiBrowserRecord::browseCB,
-                                                        browserRec);
+    if (errorCode != kDNSServiceErr_NoError)
+        throw DnsSdError(std::string("DNSServiceBrowse: ")+getDnsSdErrorName(errorCode));
 
-    if (!sb)
-    {
-        // remove empty records
-        if (browserRec->serviceBrowsers.empty())
-            pimpl_->browserRecords.erase(it);
-        throw AvahiClientError("avahi_service_browser_new() failed", pimpl_->client);
-    }
-    browserRec->serviceBrowsers.push_back(sb);
-#endif
+    pimpl_->addBrowserRecord(std::move(brec));
 }
 
 void MDNSManager::unregisterServiceBrowser(const MDNSServiceBrowser::Ptr & browser)
 {
-#if 0
-    AvahiPollGuard g(pimpl_->threadedPoll);
-
-    pimpl_->browserRecords.erase(browser);
-#endif
+    pimpl_->removeBrowser(browser);
 }
 
 std::vector<std::string> MDNSManager::getErrorLog()
