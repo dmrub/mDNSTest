@@ -50,7 +50,7 @@ void MDNSManager::registerService(MDNSService service)
 
 void MDNSManager::registerServiceBrowser(MDNSInterfaceIndex interfaceIndex,
                                          const std::string &type,
-                                         const std::vector<std::string> &subtypes,
+                                         const std::vector<std::string> *subtypes,
                                          const std::string &domain,
                                          const MDNSServiceBrowser::Ptr & browser)
 {
