@@ -14,9 +14,13 @@ class MyBrowser: public MDNSServiceBrowser
 {
 public:
 
+    MyBrowser(const std::string &name)
+        : name_(name)
+    { }
+
     void onNewService(const MDNSService &service) override
     {
-        std::cerr << "New service "<<service.name<<" of type "<<service.type<<" on domain "<<service.domain
+        std::cerr << "New "<<name_<<" service "<<service.name<<" of type "<<service.type<<" on domain "<<service.domain
                 <<" (interface: "<<service.interfaceIndex<<", host: "<<service.host
                 <<", port "<<service.port<<")"<<std::endl;
         if (!service.txtRecords.empty())
@@ -32,9 +36,11 @@ public:
 
     void onRemovedService(const std::string &name, const std::string &type, const std::string &domain) override
     {
-        std::cerr<<"Removed service "<<name<<" of type "<<type<<" on domain "<<domain<<std::endl;
+        std::cerr<<"Removed "<<name_<<" service "<<name<<" of type "<<type<<" on domain "<<domain<<std::endl;
     }
 
+private:
+    std::string name_;
 };
 
 int main(int argc, char **argv)
@@ -53,9 +59,11 @@ int main(int argc, char **argv)
         std::cerr<<"ERROR "<<errorMsg<<std::endl;
     });
 
-    MyBrowser::Ptr b = std::make_shared<MyBrowser>();
+    MyBrowser::Ptr httpBrowser = std::make_shared<MyBrowser>("HTTP");
+    MyBrowser::Ptr arvidaBrowser = std::make_shared<MyBrowser>("ARVIDA");
 
-    mgr.registerServiceBrowser(MDNS_IF_ANY, "_http._tcp", "", b);
+    mgr.registerServiceBrowser(MDNS_IF_ANY, "_http._tcp", "", httpBrowser);
+    mgr.registerServiceBrowser(MDNS_IF_ANY, "_http._tcp", {"_arvida"}, "", arvidaBrowser);
 
     s.name = "MyService";
     s.port = 8080;

@@ -676,6 +676,40 @@ public:
         }
     }
 
+    void registerServiceBrowser(MDNSInterfaceIndex interfaceIndex,
+                                const std::string &type,
+                                const std::string &domain,
+                                const MDNSServiceBrowser::Ptr & browser)
+    {
+        MDNSManager::PImpl::AvahiBrowserRecord *browserRec = 0;
+        auto it = browserRecords.find(browser);
+        if (it == browserRecords.end())
+        {
+            it = browserRecords.insert(
+                    std::make_pair(browser,
+                        MDNSManager::PImpl::AvahiBrowserRecord(browser, *this))).first;
+        }
+        browserRec = &it->second;
+
+        AvahiServiceBrowser *sb = avahi_service_browser_new(client,
+                                                            toAvahiIfIndex(interfaceIndex),
+                                                            AVAHI_PROTO_UNSPEC,
+                                                            toAvahiStr(type),
+                                                            toAvahiStr(domain),
+                                                            (AvahiLookupFlags)0,
+                                                            MDNSManager::PImpl::AvahiBrowserRecord::browseCB,
+                                                            browserRec);
+
+        if (!sb)
+        {
+            // remove empty records
+            if (browserRec->serviceBrowsers.empty())
+                browserRecords.erase(it);
+            throw AvahiClientError("avahi_service_browser_new() failed", client);
+        }
+        browserRec->serviceBrowsers.push_back(sb);
+    }
+
 };
 
 MDNSManager::MDNSManager()
@@ -734,6 +768,7 @@ void MDNSManager::registerService(MDNSService service)
 
 void MDNSManager::registerServiceBrowser(MDNSInterfaceIndex interfaceIndex,
                                          const std::string &type,
+                                         const std::vector<std::string> *subtypes,
                                          const std::string &domain,
                                          const MDNSServiceBrowser::Ptr & browser)
 {
@@ -742,33 +777,19 @@ void MDNSManager::registerServiceBrowser(MDNSInterfaceIndex interfaceIndex,
 
     AvahiPollGuard g(pimpl_->threadedPoll);
 
-    MDNSManager::PImpl::AvahiBrowserRecord *browserRec = 0;
-    auto it = pimpl_->browserRecords.find(browser);
-    if (it == pimpl_->browserRecords.end())
+    if (subtypes)
     {
-        it = pimpl_->browserRecords.insert(
-                std::make_pair(browser,
-                    MDNSManager::PImpl::AvahiBrowserRecord(browser, *pimpl_))).first;
+        std::string subtype;
+        for (auto it = subtypes->begin(), eit = subtypes->end(); it != eit; ++it)
+        {
+            subtype = it->empty() ? type : (*it+"._sub."+type);
+            pimpl_->registerServiceBrowser(interfaceIndex, subtype, domain, browser);
+        }
     }
-    browserRec = &it->second;
-
-    AvahiServiceBrowser *sb = avahi_service_browser_new(pimpl_->client,
-                                                        toAvahiIfIndex(interfaceIndex),
-                                                        AVAHI_PROTO_UNSPEC,
-                                                        toAvahiStr(type),
-                                                        toAvahiStr(domain),
-                                                        (AvahiLookupFlags)0,
-                                                        MDNSManager::PImpl::AvahiBrowserRecord::browseCB,
-                                                        browserRec);
-
-    if (!sb)
+    else
     {
-        // remove empty records
-        if (browserRec->serviceBrowsers.empty())
-            pimpl_->browserRecords.erase(it);
-        throw AvahiClientError("avahi_service_browser_new() failed", pimpl_->client);
+        pimpl_->registerServiceBrowser(interfaceIndex, type, domain, browser);
     }
-    browserRec->serviceBrowsers.push_back(sb);
 }
 
 void MDNSManager::unregisterServiceBrowser(const MDNSServiceBrowser::Ptr & browser)

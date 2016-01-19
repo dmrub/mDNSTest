@@ -547,6 +547,30 @@ public:
     }
 
 
+    void registerServiceBrowser(uint32_t interfaceIndex,
+                                const char *dnsType,
+                                const char *dnsDomain,
+                                const MDNSServiceBrowser::Ptr & browser)
+    {
+        std::unique_ptr<BrowserRecord> brec(new BrowserRecord(browser, *this));
+
+        brec->serviceRef = connectionRef;
+
+        DNSServiceErrorType err =
+            DNSServiceBrowse(&brec->serviceRef,
+                             kDNSServiceFlagsShareConnection,
+                             interfaceIndex,
+                             dnsType,
+                             dnsDomain,
+                             &BrowserRecord::browseCB,
+                             brec.get());
+
+        if (err != kDNSServiceErr_NoError)
+            throw DnsSdError(std::string("DNSServiceBrowse: ")+getDnsSdErrorName(err));
+
+        browserRecordMap.insert(std::make_pair(brec->handler, std::move(brec)));
+    }
+
 };
 
 MDNSManager::MDNSManager()
@@ -635,32 +659,37 @@ void MDNSManager::registerService(MDNSService service)
 
 void MDNSManager::registerServiceBrowser(MDNSInterfaceIndex interfaceIndex,
                                          const std::string &type,
+                                         const std::vector<std::string> *subtypes,
                                          const std::string &domain,
                                          const MDNSServiceBrowser::Ptr & browser)
 {
     if (type.empty())
         throw std::logic_error("type argument can't be empty");
 
-    std::unique_ptr<MDNSManager::PImpl::BrowserRecord> brec(new MDNSManager::PImpl::BrowserRecord(browser, *pimpl_));
-
     {
         ImplLockGuard g(pimpl_->mutex);
 
-        brec->serviceRef = pimpl_->connectionRef;
-
-        DNSServiceErrorType err =
-            DNSServiceBrowse(&brec->serviceRef,
-                             kDNSServiceFlagsShareConnection,
-                             toDnsSdInterfaceIndex(interfaceIndex),
-                             toDnsSdStr(type),
-                             toDnsSdStr(domain),
-                             &MDNSManager::PImpl::BrowserRecord::browseCB,
-                             brec.get());
-
-        if (err != kDNSServiceErr_NoError)
-            throw DnsSdError(std::string("DNSServiceBrowse: ")+getDnsSdErrorName(err));
-
-        pimpl_->browserRecordMap.insert(std::make_pair(brec->handler, std::move(brec)));
+        if (subtypes)
+        {
+            std::string subtype;
+            for (auto it = subtypes->begin(), eit = subtypes->end(); it != eit; ++it)
+            {
+                subtype = type;
+                if (!it->empty())
+                    subtype += ("," + *it);
+                pimpl_->registerServiceBrowser(toDnsSdInterfaceIndex(interfaceIndex),
+                                               toDnsSdStr(subtype),
+                                               toDnsSdStr(domain),
+                                               browser);
+            }
+        }
+        else
+        {
+            pimpl_->registerServiceBrowser(toDnsSdInterfaceIndex(interfaceIndex),
+                                           toDnsSdStr(type),
+                                           toDnsSdStr(domain),
+                                           browser);
+        }
     }
 }
 

@@ -163,7 +163,32 @@ public:
     void registerServiceBrowser(MDNSInterfaceIndex interfaceIndex,
                                 const std::string &type,
                                 const std::string &domain,
-                                const MDNSServiceBrowser::Ptr & browser);
+                                const MDNSServiceBrowser::Ptr & browser)
+    {
+        registerServiceBrowser(interfaceIndex,
+                               type,
+                               static_cast<std::vector<std::string> *>(0),
+                               domain,
+                               browser);
+    }
+
+    /**
+     * Register service browser for services on specified interface index,
+     * service type, subtypes and domain.
+     * Browser handler methods are called in event loop thread.
+     */
+    void registerServiceBrowser(MDNSInterfaceIndex interfaceIndex,
+                                const std::string &type,
+                                const std::vector<std::string> &subtypes,
+                                const std::string &domain,
+                                const MDNSServiceBrowser::Ptr & browser)
+    {
+        registerServiceBrowser(interfaceIndex,
+                               type,
+                               &subtypes,
+                               domain,
+                               browser);
+    }
 
     /**
      * Unregister service
@@ -178,6 +203,13 @@ public:
     static bool isAvailable();
 
 private:
+
+    void registerServiceBrowser(MDNSInterfaceIndex interfaceIndex,
+                                const std::string &type,
+                                const std::vector<std::string> *subtypes,
+                                const std::string &domain,
+                                const MDNSServiceBrowser::Ptr & browser);
+
     class PImpl;
     std::unique_ptr<PImpl> pimpl_;
 };
