@@ -254,6 +254,67 @@ public:
     DNSServiceRef connectionRef;
     std::vector<DNSServiceRef> serviceRefs;
 
+    struct RegisterRecord
+    {
+        std::string serviceName;
+        MDNSManager::PImpl &pimpl;
+
+        RegisterRecord(const std::string &serviceName, MDNSManager::PImpl &pimpl)
+            : serviceName(serviceName), pimpl(pimpl)
+        { }
+
+        /**
+         * register callback
+         */
+        static void DNSSD_API registerCB(
+            DNSServiceRef                       sdRef,
+            DNSServiceFlags                     flags,
+            DNSServiceErrorType                 errorCode,
+            const char                          *name,
+            const char                          *regtype,
+            const char                          *domain,
+            void                                *context )
+        {
+            // This is the asynchronous callback
+            // Can be used to handle async. errors, get data from instantiated service or record references, etc.
+            // Context is same pointer that was given to the callout
+            // If registration was successful, errorCode = kDNSServiceErr_NoError
+            RegisterRecord *self = static_cast<RegisterRecord*>(context);
+            std::unique_ptr<RegisterRecord> g(self); // delete RegisterRecord on return
+
+            std::string serviceType = toDnsSdStr(regtype);
+            std::string serviceDomain = toDnsSdStr(domain);
+
+            // std::cerr << "REGISTER CALLBACK "<<name<<" EC "<<errorCode<<" FLAGS "<<flags<<" PTR "<<sdRef<<std::endl;
+
+            if (errorCode == kDNSServiceErr_NoError)
+            {
+                if (flags & kDNSServiceFlagsAdd)
+                {
+                    std::string newName = toDnsSdStr(name);
+                    if (self->serviceName != newName)
+                    {
+                        if (self->pimpl.alternativeServiceNameHandler)
+                            self->pimpl.alternativeServiceNameHandler(newName, self->serviceName);
+                    }
+                }
+                else
+                {
+                    removeTrailingDot(serviceType);
+                    removeTrailingDot(serviceDomain);
+
+                    self->pimpl.error(std::string("Could not register service '")+
+                                      self->serviceName+"' (type: "+serviceType+", domain: "+serviceDomain+")");
+                }
+            }
+            else
+            {
+                self->pimpl.error(std::string("Register callback: ")+getDnsSdErrorName(errorCode));
+            }
+        }
+
+    };
+
     struct BrowserRecord
     {
         MDNSServiceBrowser::Ptr handler;
@@ -296,7 +357,7 @@ public:
 
             if (flags & kDNSServiceFlagsAdd)
             {
-                ResolveRecord *rr = new ResolveRecord(self, std::move(type), std::move(domain));
+                std::unique_ptr<ResolveRecord> resrec(new ResolveRecord(self, std::move(type), std::move(domain)));
                 DNSServiceRef resolveRef = self->pimpl.connectionRef;
                 DNSServiceErrorType err =
                     DNSServiceResolve(&resolveRef,
@@ -306,15 +367,14 @@ public:
                                       regtype,
                                       replyDomain,
                                       &resolveCB,
-                                      rr);
+                                      resrec.get());
 
                 if (err == kDNSServiceErr_NoError)
                 {
-                    // nothing to do
+                    resrec.release(); // resolveCB will delete ResolveRecord
                 }
                 else
                 {
-                    delete rr;
                     self->pimpl.error(std::string("DNSServiceResolve: ")+getDnsSdErrorName(err));
                 }
             }
@@ -486,25 +546,6 @@ public:
         errorLog.push_back(std::move(errorMsg));
     }
 
-    /**
-     * register callback
-     */
-    static void DNSSD_API registerCB(
-        DNSServiceRef                       sdRef,
-        DNSServiceFlags                     flags,
-        DNSServiceErrorType                 errorCode,
-        const char                          *name,
-        const char                          *regtype,
-        const char                          *domain,
-        void                                *context )
-    {
-        // This is the asynchronous callback
-        // Can be used to handle async. errors, get data from instantiated service or record references, etc.
-        // Context is same pointer that was given to the callout
-        // If registration was successful, errorCode = kDNSServiceErr_NoError
-        MDNSManager::PImpl *self = static_cast<MDNSManager::PImpl*>(context);
-        std::cerr<<"REGISTER CALLBACK "<<name<<std::endl;
-    }
 
 };
 
@@ -554,6 +595,9 @@ void MDNSManager::registerService(MDNSService service)
         throw DnsSdError("Invalid fields in TXT record of service '"+service.name+"'");
     }
 
+    std::unique_ptr<MDNSManager::PImpl::RegisterRecord> rrec(
+            new MDNSManager::PImpl::RegisterRecord(service.name, *pimpl_));
+
     {
         ImplLockGuard g(pimpl_->mutex);
 
@@ -570,12 +614,13 @@ void MDNSManager::registerService(MDNSService service)
                                service.port,
                                txtRecordData.empty() ? 0 : txtRecordData.length()+1,
                                txtRecordData.empty() ? NULL : txtRecordData.c_str(),
-                               &MDNSManager::PImpl::registerCB, // callback pointer, called upon return from API
-                               pimpl_.get());
+                               &MDNSManager::PImpl::RegisterRecord::registerCB, // register callback
+                               rrec.get());
 
         if (err != kDNSServiceErr_NoError)
             throw DnsSdError(std::string("DNSServiceRegister: ")+getDnsSdErrorName(err));
 
+        rrec.release(); // registration callback will delete RegisterRecord
         pimpl_->serviceRefs.push_back(sdRef);
     }
 }
