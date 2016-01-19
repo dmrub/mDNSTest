@@ -47,6 +47,9 @@ namespace MDNS
 namespace
 {
 
+typedef std::mutex ImplMutex;
+typedef std::lock_guard<std::mutex> ImplLockGuard;
+
 inline bool strEndsWith(const std::string &str, const std::string &strEnd)
 {
     if (strEnd.size() > str.size())
@@ -239,38 +242,6 @@ public:
     }
 };
 
-class DNSServiceRefWrapper
-{
-public:
-
-    DNSServiceRef serviceRef;
-
-    DNSServiceRefWrapper(DNSServiceRef serviceRef)
-        : serviceRef(serviceRef)
-    { }
-
-    DNSServiceRefWrapper(const DNSServiceRefWrapper &other) = delete;
-
-    DNSServiceRefWrapper(DNSServiceRefWrapper &&other)
-        : serviceRef(other.release())
-    {
-    }
-
-    DNSServiceRef release()
-    {
-        DNSServiceRef tmp = serviceRef;
-        serviceRef = (DNSServiceRef)0;
-        return tmp;
-    }
-
-    ~DNSServiceRefWrapper()
-    {
-        if (serviceRef)
-            DNSServiceRefDeallocate(serviceRef);
-    }
-};
-
-
 } // unnamed namespace
 
 class MDNSManager::PImpl
@@ -278,8 +249,9 @@ class MDNSManager::PImpl
 public:
 
     std::thread thread;
-    std::mutex mutex;
+    ImplMutex mutex;
     std::atomic<bool> processEvents;
+    DNSServiceRef connectionRef;
     std::vector<DNSServiceRef> serviceRefs;
 
     struct BrowserRecord
@@ -318,34 +290,41 @@ public:
                 void *context )
         {
             BrowserRecord *self = static_cast<BrowserRecord*>(context);
+
+            std::string type = toDnsSdStr(regtype);
+            std::string domain = toDnsSdStr(replyDomain);
+
             if (flags & kDNSServiceFlagsAdd)
             {
-                DNSServiceRef resolveRef;
-                ResolveRecord *rr = new ResolveRecord(self, toDnsSdStr(regtype), toDnsSdStr(replyDomain));
-                DNSServiceErrorType errorCode =
+                ResolveRecord *rr = new ResolveRecord(self, std::move(type), std::move(domain));
+                DNSServiceRef resolveRef = self->pimpl.connectionRef;
+                DNSServiceErrorType err =
                     DNSServiceResolve(&resolveRef,
-                                       (DNSServiceFlags)0,
-                                       interfaceIndex,
-                                       serviceName,
-                                       regtype,
-                                       replyDomain,
-                                       &resolveCB,
-                                       rr);
+                                      kDNSServiceFlagsShareConnection,
+                                      interfaceIndex,
+                                      serviceName,
+                                      regtype,
+                                      replyDomain,
+                                      &resolveCB,
+                                      rr);
 
-                if (errorCode == kDNSServiceErr_NoError)
+                if (err == kDNSServiceErr_NoError)
                 {
-                    self->pimpl.addServiceRef(resolveRef);
+                    // nothing to do
                 }
                 else
                 {
                     delete rr;
-                    self->pimpl.error(std::string("DNSServiceResolve: ")+getDnsSdErrorName(errorCode));
+                    self->pimpl.error(std::string("DNSServiceResolve: ")+getDnsSdErrorName(err));
                 }
             }
             else
             {
+                removeTrailingDot(type);
+                removeTrailingDot(domain);
+
                 if (self->handler)
-                    self->handler->onRemovedService(serviceName, regtype, replyDomain);
+                    self->handler->onRemovedService(serviceName, std::move(type), std::move(domain));
             }
         }
 
@@ -392,7 +371,7 @@ public:
             if (self->handler)
                 self->handler->onNewService(service);
 
-            self->pimpl.removeServiceRef(sdRef);
+            DNSServiceRefDeallocate(sdRef);
         }
 
     };
@@ -405,73 +384,64 @@ public:
     std::vector<std::string> errorLog;
 
     PImpl()
-        : thread(), mutex(), processEvents(true)
+        : thread(), mutex(), processEvents(true), connectionRef(0)
     {
+        DNSServiceErrorType errorCode = DNSServiceCreateConnection(&connectionRef);
+
+        if (errorCode != kDNSServiceErr_NoError)
+            throw DnsSdError(std::string("DNSServiceCreateConnection: ")+getDnsSdErrorName(errorCode));
     }
 
     ~PImpl()
     {
         stop();
-        for (auto it = serviceRefs.begin(), eit = serviceRefs.end(); it != eit; ++it)
-        {
-            DNSServiceRefDeallocate(*it);
-        }
+        DNSServiceRefDeallocate(connectionRef);
     }
 
     void eventLoop()
     {
-        std::vector<DNSServiceRef> localRefs;
+        int fd;
+
+        {
+            ImplLockGuard g(mutex);
+            fd = DNSServiceRefSockFD(connectionRef);
+        }
+
+        if (fd == -1)
+        {
+            error("DNSServiceRefSockFD: failed");
+            return;
+        }
+
+        int nfds = fd + 1;
         fd_set readfds;
         struct timeval tv;
+        DNSServiceErrorType err;
 
         while (processEvents)
         {
-
-            {
-                std::lock_guard<std::mutex> g(mutex);
-                localRefs = serviceRefs;
-            }
-
-            int maxFD = 0;
-
             // 1. Set up the fd_set as usual here.
             FD_ZERO(&readfds);
 
-            for (auto it = localRefs.begin(), iend = localRefs.end(); it != iend; ++it)
-            {
-                int fd  = DNSServiceRefSockFD(*it);
-                if (maxFD < fd)
-                    maxFD = fd;
-
-                // 2. Add the fd to the fd_set
-                FD_SET(fd , &readfds);
-
-
-                // handleEvents(*it);
-            }
-
-            int nfds = maxFD + 1;
+            // 2. Add the fd to the fd_set
+            FD_SET(fd, &readfds);
 
             // 3. Set up the timeout.
             tv.tv_sec = 1; // wakes up every 1 sec if no socket activity occurs
             tv.tv_usec = 0;
 
-            // wait for pending data or 5 secs to elapse:
+            // wait for pending data or timeout to elapse:
             int result = select(nfds, &readfds, (fd_set*) 0, (fd_set*) 0, &tv);
             if (result > 0)
             {
-                for (auto it = localRefs.begin(), iend = localRefs.end(); it != iend; ++it)
                 {
-                    int fd = DNSServiceRefSockFD(*it);
-                    if (FD_ISSET(fd , &readfds))
-                    {
-                        DNSServiceErrorType err = DNSServiceProcessResult(*it);
-                        if (err != kDNSServiceErr_NoError)
-                        {
-                            error(std::string("DNSServiceProcessResult returned ")+getDnsSdErrorName(err));
-                        }
-                    }
+                    ImplLockGuard g(mutex);
+                    err = kDNSServiceErr_NoError;
+                    if (FD_ISSET(fd, &readfds))
+                        err = DNSServiceProcessResult(connectionRef);
                 }
+                if (err != kDNSServiceErr_NoError)
+                    error(std::string("DNSServiceProcessResult returned ")+getDnsSdErrorName(err));
             }
             else if (result == 0)
             {
@@ -509,7 +479,7 @@ public:
 
     void error(std::string errorMsg)
     {
-        std::lock_guard<std::mutex> g(mutex);
+        ImplLockGuard g(mutex);
 
         if (errorHandler)
             errorHandler(errorMsg);
@@ -534,39 +504,6 @@ public:
         // If registration was successful, errorCode = kDNSServiceErr_NoError
         MDNSManager::PImpl *self = static_cast<MDNSManager::PImpl*>(context);
         std::cerr<<"REGISTER CALLBACK "<<name<<std::endl;
-    }
-
-
-    void addServiceRef(DNSServiceRef serviceRef)
-    {
-        std::lock_guard<std::mutex> g(mutex);
-        serviceRefs.push_back(serviceRef);
-    }
-
-    void removeServiceRef(DNSServiceRef serviceRef)
-    {
-        std::lock_guard<std::mutex> g(mutex);
-        serviceRefs.erase( std::remove( serviceRefs.begin(), serviceRefs.end(), serviceRef ), serviceRefs.end() );
-        DNSServiceRefDeallocate(serviceRef);
-    }
-
-    void addBrowserRecord(std::unique_ptr<BrowserRecord> brec)
-    {
-        std::lock_guard<std::mutex> g(mutex);
-        serviceRefs.push_back(brec->serviceRef);
-        browserRecordMap.insert(std::make_pair(brec->handler, std::move(brec)));
-    }
-
-    void removeBrowser(const MDNSServiceBrowser::Ptr & browser)
-    {
-        std::lock_guard<std::mutex> g(mutex);
-        auto range = browserRecordMap.equal_range(browser);
-        for (auto it = range.first, eit = range.second; it != eit; ++it)
-        {
-            serviceRefs.erase( std::remove( serviceRefs.begin(), serviceRefs.end(), it->second->serviceRef ), serviceRefs.end() );
-            DNSServiceRefDeallocate(it->second->serviceRef);
-        }
-        browserRecordMap.erase(browser);
     }
 
 };
@@ -597,19 +534,18 @@ void MDNSManager::stop()
 
 void MDNSManager::setAlternativeServiceNameHandler(MDNSManager::AlternativeServiceNameHandler handler)
 {
-    std::lock_guard<std::mutex> g(pimpl_->mutex);
+    ImplLockGuard g(pimpl_->mutex);
     pimpl_->alternativeServiceNameHandler = handler;
 }
 
 void MDNSManager::setErrorHandler(MDNSManager::ErrorHandler handler)
 {
-    std::lock_guard<std::mutex> g(pimpl_->mutex);
+    ImplLockGuard g(pimpl_->mutex);
     pimpl_->errorHandler = handler;
 }
 
 void MDNSManager::registerService(MDNSService service)
 {
-    DNSServiceRef sdRef; // Uninitialized reference to service
 
     bool invalidFields;
     std::string txtRecordData = encodeTxtRecordData(service.txtRecords, invalidFields);
@@ -618,24 +554,30 @@ void MDNSManager::registerService(MDNSService service)
         throw DnsSdError("Invalid fields in TXT record of service '"+service.name+"'");
     }
 
-    DNSServiceErrorType errorCode =
-        DNSServiceRegister(&sdRef,
-                           (DNSServiceFlags)0,
-                           toDnsSdInterfaceIndex(service.interfaceIndex),
-                           service.name.c_str(),
-                           toDnsSdStr(service.type),
-                           toDnsSdStr(service.domain),
-                           toDnsSdStr(service.host),
-                           service.port,
-                           txtRecordData.empty() ? 0 : txtRecordData.length()+1,
-                           txtRecordData.empty() ? NULL : txtRecordData.c_str(),
-                           &MDNSManager::PImpl::registerCB, // callback pointer, called upon return from API
-                           pimpl_.get());
+    {
+        ImplLockGuard g(pimpl_->mutex);
 
-    if (errorCode != kDNSServiceErr_NoError)
-        throw DnsSdError(std::string("DNSServiceRegister: ")+getDnsSdErrorName(errorCode));
+        DNSServiceRef sdRef = pimpl_->connectionRef;
 
-    pimpl_->addServiceRef(sdRef);
+        DNSServiceErrorType err =
+            DNSServiceRegister(&sdRef,
+                               kDNSServiceFlagsShareConnection,
+                               toDnsSdInterfaceIndex(service.interfaceIndex),
+                               service.name.c_str(),
+                               toDnsSdStr(service.type),
+                               toDnsSdStr(service.domain),
+                               toDnsSdStr(service.host),
+                               service.port,
+                               txtRecordData.empty() ? 0 : txtRecordData.length()+1,
+                               txtRecordData.empty() ? NULL : txtRecordData.c_str(),
+                               &MDNSManager::PImpl::registerCB, // callback pointer, called upon return from API
+                               pimpl_.get());
+
+        if (err != kDNSServiceErr_NoError)
+            throw DnsSdError(std::string("DNSServiceRegister: ")+getDnsSdErrorName(err));
+
+        pimpl_->serviceRefs.push_back(sdRef);
+    }
 }
 
 void MDNSManager::registerServiceBrowser(MDNSInterfaceIndex interfaceIndex,
@@ -648,31 +590,43 @@ void MDNSManager::registerServiceBrowser(MDNSInterfaceIndex interfaceIndex,
 
     std::unique_ptr<MDNSManager::PImpl::BrowserRecord> brec(new MDNSManager::PImpl::BrowserRecord(browser, *pimpl_));
 
-    DNSServiceErrorType errorCode =
-        DNSServiceBrowse(&brec->serviceRef,
-                         (DNSServiceFlags)0,
-                         toDnsSdInterfaceIndex(interfaceIndex),
-                         toDnsSdStr(type),
-                         toDnsSdStr(domain),
-                         &MDNSManager::PImpl::BrowserRecord::browseCB,
-                         brec.get());
+    {
+        ImplLockGuard g(pimpl_->mutex);
 
-    if (errorCode != kDNSServiceErr_NoError)
-        throw DnsSdError(std::string("DNSServiceBrowse: ")+getDnsSdErrorName(errorCode));
+        brec->serviceRef = pimpl_->connectionRef;
 
-    pimpl_->addBrowserRecord(std::move(brec));
+        DNSServiceErrorType err =
+            DNSServiceBrowse(&brec->serviceRef,
+                             kDNSServiceFlagsShareConnection,
+                             toDnsSdInterfaceIndex(interfaceIndex),
+                             toDnsSdStr(type),
+                             toDnsSdStr(domain),
+                             &MDNSManager::PImpl::BrowserRecord::browseCB,
+                             brec.get());
+
+        if (err != kDNSServiceErr_NoError)
+            throw DnsSdError(std::string("DNSServiceBrowse: ")+getDnsSdErrorName(err));
+
+        pimpl_->browserRecordMap.insert(std::make_pair(brec->handler, std::move(brec)));
+    }
 }
 
 void MDNSManager::unregisterServiceBrowser(const MDNSServiceBrowser::Ptr & browser)
 {
-    pimpl_->removeBrowser(browser);
+    ImplLockGuard g(pimpl_->mutex);
+    auto range = pimpl_->browserRecordMap.equal_range(browser);
+    for (auto it = range.first, eit = range.second; it != eit; ++it)
+    {
+        DNSServiceRefDeallocate(it->second->serviceRef);
+    }
+    pimpl_->browserRecordMap.erase(browser);
 }
 
 std::vector<std::string> MDNSManager::getErrorLog()
 {
     std::vector<std::string> result;
     {
-        std::lock_guard<std::mutex> g(pimpl_->mutex);
+        ImplLockGuard g(pimpl_->mutex);
         result.swap(pimpl_->errorLog);
     }
     return result;
