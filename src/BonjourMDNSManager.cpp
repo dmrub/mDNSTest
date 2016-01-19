@@ -134,7 +134,7 @@ std::vector<std::string> decodeTxtRecordData(uint16_t txtLen, const unsigned cha
 {
     std::vector<std::string> res;
     const unsigned char *cur = txtRecord;
-    uint16_t i = 0;
+    std::string::size_type i = 0;
     while (i < txtLen)
     {
         std::string::size_type len = static_cast<std::string::size_type>(*cur);
@@ -587,7 +587,6 @@ void MDNSManager::setErrorHandler(MDNSManager::ErrorHandler handler)
 
 void MDNSManager::registerService(MDNSService service)
 {
-
     bool invalidFields;
     std::string txtRecordData = encodeTxtRecordData(service.txtRecords, invalidFields);
     if (invalidFields)
@@ -597,6 +596,15 @@ void MDNSManager::registerService(MDNSService service)
 
     std::unique_ptr<MDNSManager::PImpl::RegisterRecord> rrec(
             new MDNSManager::PImpl::RegisterRecord(service.name, *pimpl_));
+
+    std::string serviceType = service.type;
+    if (!serviceType.empty())
+    {
+        for (auto it = service.subtypes.begin(), eit = service.subtypes.end(); it != eit; ++it)
+        {
+            serviceType += "," + *it;
+        }
+    }
 
     {
         ImplLockGuard g(pimpl_->mutex);
@@ -608,7 +616,7 @@ void MDNSManager::registerService(MDNSService service)
                                kDNSServiceFlagsShareConnection,
                                toDnsSdInterfaceIndex(service.interfaceIndex),
                                service.name.c_str(),
-                               toDnsSdStr(service.type),
+                               toDnsSdStr(serviceType),
                                toDnsSdStr(service.domain),
                                toDnsSdStr(service.host),
                                service.port,

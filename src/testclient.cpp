@@ -68,6 +68,7 @@ int main(int argc, char **argv)
 
     s.name = "ARVIDA Service";
     s.port = 9090;
+    s.subtypes.push_back("_arvida");
     s.txtRecords.push_back("FOO=BOO");
     mgr.registerService(s);
 
