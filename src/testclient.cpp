@@ -20,13 +20,13 @@ public:
 
     void onNewService(const MDNSService &service) override
     {
-        std::cerr << "New "<<name_<<" service "<<service.name<<" of type "<<service.type<<" on domain "<<service.domain
-                <<" (interface: "<<service.interfaceIndex<<", host: "<<service.host
-                <<", port "<<service.port<<")"<<std::endl;
-        if (!service.txtRecords.empty())
+        std::cerr << "New "<<name_<<" service "<<service.getName()<<" of type "<<service.getType()<<" on domain "<<service.getDomain()
+                  <<" (interface: "<<service.getInterfaceIndex()<<", host: "<<service.getHost()
+                  <<", port "<<service.getPort()<<")"<<std::endl;
+        if (!service.getTxtRecords().empty())
         {
             std::cerr << "  TXT ["<<std::endl;
-            for (auto it = service.txtRecords.begin(), iend = service.txtRecords.end(); it != iend; ++it)
+            for (auto it = service.getTxtRecords().begin(), iend = service.getTxtRecords().end(); it != iend; ++it)
             {
                 std::cerr<<"    "<<*it<<std::endl;
             }
@@ -65,19 +65,13 @@ int main(int argc, char **argv)
     mgr.registerServiceBrowser(MDNS_IF_ANY, "_http._tcp", "", httpBrowser);
     mgr.registerServiceBrowser(MDNS_IF_ANY, "_http._tcp", {"_arvida"}, "", arvidaBrowser);
 
-    s.name = "MyService";
-    s.port = 8080;
-    s.type = "_http._tcp";
-    s.txtRecords.push_back("path=/foobar");
+    s.setName("MyService").setPort(8080).setType("_http._tcp").addTxtRecord("path=/foobar");
     mgr.registerService(s);
 
     std::cout << "Running loop...";
     mgr.run();
 
-    s.name = "ARVIDA Service";
-    s.port = 9090;
-    s.subtypes.push_back("_arvida");
-    s.txtRecords.push_back("FOO=BOO");
+    s.setName("ARVIDA Service").setPort(9090).addSubtype("_arvida").addTxtRecord("FOO=BOO");
     mgr.registerService(s);
 
     std::cin.get();

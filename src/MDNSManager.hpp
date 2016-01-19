@@ -26,72 +26,63 @@ class MDNSService
 {
 public:
 
-    MDNSInterfaceIndex interfaceIndex;
-    std::string name;                    // name of the service
-    std::string type;                    // the service type followed by the protocol
-    std::string domain;                  // if not empty, specifies the domain on which to advertise the service
-    std::string host;                    // if not empty, specifies the SRV target host name.
-    unsigned int port;                   // the port, in network byte order, on which the service accepts connections.
-    std::vector<std::string> txtRecords; // TXT records
-    std::vector<std::string> subtypes;   // subtypes of the service
-
     MDNSService()
-        : interfaceIndex(MDNS_IF_ANY)
-        , name()
-        , type()
-        , domain()
-        , host()
-        , port()
-        , txtRecords()
-        , subtypes()
+        : interfaceIndex_(MDNS_IF_ANY)
+        , name_()
+        , type_()
+        , domain_()
+        , host_()
+        , port_()
+        , txtRecords_()
+        , subtypes_()
     {
     }
 
     MDNSService(const MDNSService &other)
-        : interfaceIndex(other.interfaceIndex)
-        , name(other.name)
-        , type(other.type)
-        , domain(other.domain)
-        , host(other.host)
-        , port(other.port)
-        , txtRecords(other.txtRecords)
-        , subtypes(other.subtypes)
+        : interfaceIndex_(other.interfaceIndex_)
+        , name_(other.name_)
+        , type_(other.type_)
+        , domain_(other.domain_)
+        , host_(other.host_)
+        , port_(other.port_)
+        , txtRecords_(other.txtRecords_)
+        , subtypes_(other.subtypes_)
     { }
 
     MDNSService(MDNSService &&other)
-        : interfaceIndex(other.interfaceIndex)
-        , name(std::move(other.name))
-        , type(std::move(other.type))
-        , domain(std::move(other.domain))
-        , host(std::move(other.host))
-        , port(other.port)
-        , txtRecords(std::move(other.txtRecords))
-        , subtypes(std::move(other.subtypes))
+        : interfaceIndex_(other.interfaceIndex_)
+        , name_(std::move(other.name_))
+        , type_(std::move(other.type_))
+        , domain_(std::move(other.domain_))
+        , host_(std::move(other.host_))
+        , port_(other.port_)
+        , txtRecords_(std::move(other.txtRecords_))
+        , subtypes_(std::move(other.subtypes_))
     { }
 
     MDNSService(const std::string &name)
-        : interfaceIndex(MDNS_IF_ANY)
-        , name(name)
-        , type()
-        , domain()
-        , host()
-        , port()
-        , txtRecords()
-        , subtypes()
+        : interfaceIndex_(MDNS_IF_ANY)
+        , name_(name)
+        , type_()
+        , domain_()
+        , host_()
+        , port_()
+        , txtRecords_()
+        , subtypes_()
     { }
 
     MDNSService & operator=(const MDNSService &other)
     {
         if (this != &other)
         {
-            interfaceIndex = other.interfaceIndex;
-            name = other.name;
-            type = other.type;
-            domain = other.domain;
-            host = other.host;
-            port = other.port;
-            txtRecords = other.txtRecords;
-            subtypes = other.subtypes;
+            interfaceIndex_ = other.interfaceIndex_;
+            name_ = other.name_;
+            type_ = other.type_;
+            domain_ = other.domain_;
+            host_ = other.host_;
+            port_ = other.port_;
+            txtRecords_ = other.txtRecords_;
+            subtypes_ = other.subtypes_;
         }
         return *this;
     }
@@ -100,18 +91,174 @@ public:
     {
         if (this != &other)
         {
-            interfaceIndex = other.interfaceIndex;
-            name = other.name;
-            type = other.type;
-            domain = other.domain;
-            host = other.host;
-            port = other.port;
-            txtRecords = other.txtRecords;
-            subtypes = other.subtypes;
+            interfaceIndex_ = other.interfaceIndex_;
+            name_ = other.name_;
+            type_ = other.type_;
+            domain_ = other.domain_;
+            host_ = other.host_;
+            port_ = other.port_;
+            txtRecords_ = other.txtRecords_;
+            subtypes_ = other.subtypes_;
         }
         return *this;
     }
 
+    const std::string & getDomain() const
+    {
+        return domain_;
+    }
+
+    MDNSService & setDomain(const std::string & domain)
+    {
+        domain_ = domain;
+        return *this;
+    }
+
+    MDNSService & setDomain(std::string && domain)
+    {
+        domain_ = std::move(domain);
+        return *this;
+    }
+
+    const std::string & getHost() const
+    {
+        return host_;
+    }
+
+    MDNSService & setHost(const std::string & host)
+    {
+        host_ = host;
+        return *this;
+    }
+
+    MDNSService & setHost(std::string && host)
+    {
+        host_ = std::move(host);
+        return *this;
+    }
+
+    MDNSInterfaceIndex getInterfaceIndex() const
+    {
+        return interfaceIndex_;
+    }
+
+    void setInterfaceIndex(MDNSInterfaceIndex interfaceIndex)
+    {
+        interfaceIndex_ = interfaceIndex;
+    }
+
+    const std::string & getName() const
+    {
+        return name_;
+    }
+
+    MDNSService & setName(const std::string & name)
+    {
+        name_ = name;
+        return *this;
+    }
+
+    MDNSService & setName(std::string && name)
+    {
+        name_ = std::move(name);
+        return *this;
+    }
+
+    unsigned int getPort() const
+    {
+        return port_;
+    }
+
+    MDNSService & setPort(unsigned int port)
+    {
+        port_ = port;
+        return *this;
+    }
+
+    const std::vector<std::string> & getSubtypes() const
+    {
+        return subtypes_;
+    }
+
+    MDNSService & setSubtypes(const std::vector<std::string> & subtypes)
+    {
+        subtypes_ = subtypes;
+        return *this;
+    }
+
+    MDNSService & setSubtypes(std::vector<std::string> && subtypes)
+    {
+        subtypes_ = std::move(subtypes);
+        return *this;
+    }
+
+    MDNSService & addSubtype(const std::string & subtype)
+    {
+        subtypes_.push_back(subtype);
+        return *this;
+    }
+
+    MDNSService & addSubtype(std::string && subtype)
+    {
+        subtypes_.push_back(std::move(subtype));
+        return *this;
+    }
+
+    const std::vector<std::string> & getTxtRecords() const
+    {
+        return txtRecords_;
+    }
+
+    MDNSService & setTxtRecords(const std::vector<std::string> & txtRecords)
+    {
+        txtRecords_ = txtRecords;
+        return *this;
+    }
+
+    MDNSService & setTxtRecords(std::vector<std::string> && txtRecords)
+    {
+        txtRecords_ = std::move(txtRecords);
+        return *this;
+    }
+
+    MDNSService & addTxtRecord(const std::string & txtRecord)
+    {
+        txtRecords_.push_back(txtRecord);
+        return *this;
+    }
+
+    MDNSService & addTxtRecord(std::string && txtRecord)
+    {
+        txtRecords_.push_back(std::move(txtRecord));
+        return *this;
+    }
+
+    const std::string & getType() const
+    {
+        return type_;
+    }
+
+    MDNSService & setType(const std::string & type)
+    {
+        type_ = type;
+        return *this;
+    }
+
+    MDNSService & setType(std::string && type)
+    {
+        type_ = std::move(type);
+        return *this;
+    }
+
+private:
+    MDNSInterfaceIndex interfaceIndex_;   // index of the interface
+    std::string name_;                    // name of the service
+    std::string type_;                    // the service type followed by the protocol
+    std::string domain_;                  // if not empty, specifies the domain on which to advertise the service
+    std::string host_;                    // if not empty, specifies the SRV target host name.
+    unsigned int port_;                   // the port, in network byte order, on which the service accepts connections.
+    std::vector<std::string> txtRecords_; // TXT records
+    std::vector<std::string> subtypes_;   // subtypes of the service
 };
 
 class MDNSServiceBrowser

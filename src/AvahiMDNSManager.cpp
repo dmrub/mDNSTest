@@ -356,13 +356,13 @@ public:
             assert(client);
             assert(group);
 
-            AvahiStringList *txtRecords = toAvahiStringList(service.txtRecords);
+            AvahiStringList *txtRecords = toAvahiStringList(service.getTxtRecords());
 
             int error = avahi_entry_group_add_service_strlst(
-                    group, toAvahiIfIndex(service.interfaceIndex),
+                    group, toAvahiIfIndex(service.getInterfaceIndex()),
                     AVAHI_PROTO_UNSPEC, (AvahiPublishFlags) 0, serviceName.c_str(),
-                    toAvahiStr(service.type), toAvahiStr(service.domain),
-                    toAvahiStr(service.host), service.port, txtRecords);
+                    toAvahiStr(service.getType()), toAvahiStr(service.getDomain()),
+                    toAvahiStr(service.getHost()), service.getPort(), txtRecords);
 
             avahi_string_list_free(txtRecords);
 
@@ -379,15 +379,15 @@ public:
             }
 
             std::string subtype;
-            for (auto it = service.subtypes.begin(), et = service.subtypes.end();
+            for (auto it = service.getSubtypes().begin(), et = service.getSubtypes().end();
                     it != et; ++it)
             {
-                subtype = (*it+"._sub."+service.type);
+                subtype = (*it+"._sub."+service.getType());
                 error = avahi_entry_group_add_service_subtype(
-                        group, toAvahiIfIndex(service.interfaceIndex),
+                        group, toAvahiIfIndex(service.getInterfaceIndex()),
                         AVAHI_PROTO_UNSPEC, (AvahiPublishFlags) 0,
-                        serviceName.c_str(), toAvahiStr(service.type),
-                        toAvahiStr(service.domain), subtype.c_str());
+                        serviceName.c_str(), toAvahiStr(service.getType()),
+                        toAvahiStr(service.getDomain()), subtype.c_str());
                 if (error < 0)
                 {
                     pimpl.avahiError("avahi_entry_group_add_service_subtype() failed: subtype: "+subtype, error);
@@ -454,13 +454,13 @@ public:
                 case AVAHI_RESOLVER_FOUND:
                 {
                     MDNSService service;
-                    service.interfaceIndex = fromAvahiIfIndex(interface);
-                    service.name = fromAvahiStr(name);
-                    service.type = fromAvahiStr(type);
-                    service.domain = fromAvahiStr(domain);
-                    service.host = fromAvahiStr(host_name);
-                    service.port = port;
-                    service.txtRecords = fromAvahiStringList(txt);
+                    service.setInterfaceIndex(fromAvahiIfIndex(interface));
+                    service.setName(fromAvahiStr(name));
+                    service.setType(fromAvahiStr(type));
+                    service.setDomain(fromAvahiStr(domain));
+                    service.setHost(fromAvahiStr(host_name));
+                    service.setPort(port);
+                    service.setTxtRecords(fromAvahiStringList(txt));
 
                     if (self->handler)
                         self->handler->onNewService(service);
@@ -753,12 +753,12 @@ void MDNSManager::registerService(MDNSService service)
     AvahiPollGuard g(pimpl_->threadedPoll);
 
     MDNSManager::PImpl::AvahiServiceRecord *serviceRec = 0;
-    auto it = pimpl_->serviceRecords.find(service.name);
+    auto it = pimpl_->serviceRecords.find(service.getName());
     if (it == pimpl_->serviceRecords.end())
     {
         it = pimpl_->serviceRecords.insert(
-                std::make_pair(service.name,
-                    MDNSManager::PImpl::AvahiServiceRecord(service.name, *pimpl_))).first;
+                std::make_pair(service.getName(),
+                    MDNSManager::PImpl::AvahiServiceRecord(service.getName(), *pimpl_))).first;
     }
     serviceRec = &it->second;
 

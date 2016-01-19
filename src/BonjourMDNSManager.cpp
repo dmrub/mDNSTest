@@ -403,7 +403,7 @@ public:
             BrowserRecord *self = static_cast<BrowserRecord*>(rr->parent);
 
             MDNSService service;
-            service.interfaceIndex = fromDnsSdInterfaceIndex(interfaceIndex);
+            service.setInterfaceIndex(fromDnsSdInterfaceIndex(interfaceIndex));
 
             std::string name = decodeDNSName(fromDnsSdStr(fullname));
             std::string suffix = std::string(".") + rr->type + rr->domain;
@@ -419,12 +419,12 @@ public:
             removeTrailingDot(rr->domain);
             removeTrailingDot(host);
 
-            service.name = std::move(name);
-            service.type = std::move(rr->type);
-            service.domain = std::move(rr->domain);
-            service.host = std::move(host);
-            service.port = port;
-            service.txtRecords = decodeTxtRecordData(txtLen, txtRecord);
+            service.setName(std::move(name));
+            service.setType(std::move(rr->type));
+            service.setDomain(std::move(rr->domain));
+            service.setHost(std::move(host));
+            service.setPort(port);
+            service.setTxtRecords(decodeTxtRecordData(txtLen, txtRecord));
 
             delete rr;
 
@@ -612,19 +612,20 @@ void MDNSManager::setErrorHandler(MDNSManager::ErrorHandler handler)
 void MDNSManager::registerService(MDNSService service)
 {
     bool invalidFields;
-    std::string txtRecordData = encodeTxtRecordData(service.txtRecords, invalidFields);
+    std::string txtRecordData = encodeTxtRecordData(service.getTxtRecords(), invalidFields);
     if (invalidFields)
     {
-        throw DnsSdError("Invalid fields in TXT record of service '"+service.name+"'");
+        throw DnsSdError("Invalid fields in TXT record of service '"+service.getName()+"'");
     }
 
     std::unique_ptr<MDNSManager::PImpl::RegisterRecord> rrec(
-            new MDNSManager::PImpl::RegisterRecord(service.name, *pimpl_));
+        new MDNSManager::PImpl::RegisterRecord(service.getName(), *pimpl_));
 
-    std::string serviceType = service.type;
+    std::string serviceType = service.getType();
     if (!serviceType.empty())
     {
-        for (auto it = service.subtypes.begin(), eit = service.subtypes.end(); it != eit; ++it)
+        for (auto it = service.getSubtypes().begin(), eit = service.getSubtypes().end();
+             it != eit; ++it)
         {
             serviceType += "," + *it;
         }
@@ -638,12 +639,12 @@ void MDNSManager::registerService(MDNSService service)
         DNSServiceErrorType err =
             DNSServiceRegister(&sdRef,
                                kDNSServiceFlagsShareConnection,
-                               toDnsSdInterfaceIndex(service.interfaceIndex),
-                               service.name.c_str(),
+                               toDnsSdInterfaceIndex(service.getInterfaceIndex()),
+                               service.getName().c_str(),
                                toDnsSdStr(serviceType),
-                               toDnsSdStr(service.domain),
-                               toDnsSdStr(service.host),
-                               service.port,
+                               toDnsSdStr(service.getDomain()),
+                               toDnsSdStr(service.getHost()),
+                               service.getPort(),
                                txtRecordData.empty() ? 0 : txtRecordData.length()+1,
                                txtRecordData.empty() ? NULL : txtRecordData.c_str(),
                                &MDNSManager::PImpl::RegisterRecord::registerCB, // register callback
