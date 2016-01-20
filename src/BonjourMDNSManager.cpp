@@ -47,8 +47,8 @@ namespace MDNS
 namespace
 {
 
-typedef std::mutex ImplMutex;
-typedef std::lock_guard<std::mutex> ImplLockGuard;
+typedef std::recursive_mutex ImplMutex;
+typedef std::lock_guard<std::recursive_mutex> ImplLockGuard;
 
 inline bool strEndsWith(const std::string &str, const std::string &strEnd)
 {
@@ -545,7 +545,6 @@ public:
             errorHandler(errorMsg);
         errorLog.push_back(std::move(errorMsg));
     }
-
 
     void registerServiceBrowser(uint32_t interfaceIndex,
                                 const char *dnsType,
