@@ -355,36 +355,76 @@ public:
             std::string type = fromDnsSdStr(regtype);
             std::string domain = fromDnsSdStr(replyDomain);
 
-            if (flags & kDNSServiceFlagsAdd)
+            if (domain == ".")
             {
-                std::unique_ptr<ResolveRecord> resrec(new ResolveRecord(self, std::move(type), std::move(domain)));
-                DNSServiceRef resolveRef = self->pimpl.connectionRef;
-                DNSServiceErrorType err =
-                    DNSServiceResolve(&resolveRef,
-                                      kDNSServiceFlagsShareConnection,
-                                      interfaceIndex,
-                                      serviceName,
-                                      regtype,
-                                      replyDomain,
-                                      &resolveCB,
-                                      resrec.get());
+                // this browser response describes a service type
 
-                if (err == kDNSServiceErr_NoError)
+                if (self->handler)
                 {
-                    resrec.release(); // resolveCB will delete ResolveRecord
-                }
-                else
-                {
-                    self->pimpl.error(std::string("DNSServiceResolve: ")+getDnsSdErrorName(err));
+                    // remove trailing '.'
+                    removeTrailingDot(type);
+
+                    std::string::size_type i = type.find_last_of('.');
+                    if (i != std::string::npos)
+                    {
+                        domain = type.substr(i+1);
+                        type.resize(i);
+                    }
+
+                    type = fromDnsSdStr(serviceName)+"."+type;
+
+                    if (flags & kDNSServiceFlagsAdd)
+                    {
+                        MDNSService service;
+                        service.setInterfaceIndex(fromDnsSdInterfaceIndex(interfaceIndex));
+                        service.setType(std::move(type));
+                        service.setDomain(std::move(domain));
+
+                        self->handler->onNewService(service);
+                    }
+                    else
+                    {
+                        self->handler->onRemovedService("", std::move(type), std::move(domain));
+                    }
                 }
             }
             else
             {
-                removeTrailingDot(type);
-                removeTrailingDot(domain);
+                // standard response
+                if (flags & kDNSServiceFlagsAdd)
+                {
+                    std::unique_ptr<ResolveRecord> resrec(new ResolveRecord(self, std::move(type), std::move(domain)));
+                    DNSServiceRef resolveRef = self->pimpl.connectionRef;
+                    DNSServiceErrorType err =
+                        DNSServiceResolve(&resolveRef,
+                                          kDNSServiceFlagsShareConnection,
+                                          interfaceIndex,
+                                          serviceName,
+                                          regtype,
+                                          replyDomain,
+                                          &resolveCB,
+                                          resrec.get());
 
-                if (self->handler)
-                    self->handler->onRemovedService(serviceName, std::move(type), std::move(domain));
+                    if (err == kDNSServiceErr_NoError)
+                    {
+                        resrec.release(); // resolveCB will delete ResolveRecord
+                    }
+                    else
+                    {
+                        self->pimpl.error(std::string("DNSServiceResolve: ")+getDnsSdErrorName(err));
+                    }
+
+                }
+                else
+                {
+                    if (self->handler)
+                    {
+                        removeTrailingDot(type);
+                        removeTrailingDot(domain);
+
+                        self->handler->onRemovedService(serviceName, std::move(type), std::move(domain));
+                    }
+                }
             }
         }
 
@@ -402,34 +442,36 @@ public:
             ResolveRecord *rr = static_cast<ResolveRecord*>(context);
             BrowserRecord *self = static_cast<BrowserRecord*>(rr->parent);
 
-            MDNSService service;
-            service.setInterfaceIndex(fromDnsSdInterfaceIndex(interfaceIndex));
-
-            std::string name = decodeDNSName(fromDnsSdStr(fullname));
-            std::string suffix = std::string(".") + rr->type + rr->domain;
-            std::string host = fromDnsSdStr(hosttarget);
-
-            if (strEndsWith(name, suffix))
+            if (self->handler)
             {
-                name.resize(name.length()-suffix.length());
+                MDNSService service;
+                service.setInterfaceIndex(fromDnsSdInterfaceIndex(interfaceIndex));
+
+                std::string name = decodeDNSName(fromDnsSdStr(fullname));
+                std::string suffix = std::string(".") + rr->type + rr->domain;
+                std::string host = fromDnsSdStr(hosttarget);
+
+                if (strEndsWith(name, suffix))
+                {
+                    name.resize(name.length()-suffix.length());
+                }
+
+                // remove trailing '.'
+                removeTrailingDot(rr->type);
+                removeTrailingDot(rr->domain);
+                removeTrailingDot(host);
+
+                service.setName(std::move(name));
+                service.setType(std::move(rr->type));
+                service.setDomain(std::move(rr->domain));
+                service.setHost(std::move(host));
+                service.setPort(port);
+                service.setTxtRecords(decodeTxtRecordData(txtLen, txtRecord));
+
+                self->handler->onNewService(service);
             }
 
-            // remove trailing '.'
-            removeTrailingDot(rr->type);
-            removeTrailingDot(rr->domain);
-            removeTrailingDot(host);
-
-            service.setName(std::move(name));
-            service.setType(std::move(rr->type));
-            service.setDomain(std::move(rr->domain));
-            service.setHost(std::move(host));
-            service.setPort(port);
-            service.setTxtRecords(decodeTxtRecordData(txtLen, txtRecord));
-
             delete rr;
-
-            if (self->handler)
-                self->handler->onNewService(service);
 
             DNSServiceRefDeallocate(sdRef);
         }

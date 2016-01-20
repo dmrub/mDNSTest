@@ -312,8 +312,9 @@ public:
                                 const std::string &domain,
                                 const MDNSServiceBrowser::Ptr & browser)
     {
+        // receive available service types when type is empty
         registerServiceBrowser(interfaceIndex,
-                               type,
+                               type.empty() ? "_services._dns-sd._udp" : type,
                                static_cast<std::vector<std::string> *>(0),
                                domain,
                                browser);
@@ -330,8 +331,9 @@ public:
                                 const std::string &domain,
                                 const MDNSServiceBrowser::Ptr & browser)
     {
+        // receive available service types when type is empty
         registerServiceBrowser(interfaceIndex,
-                               type,
+                               type.empty() ? "_services._dns-sd._udp" : type,
                                &subtypes,
                                domain,
                                browser);

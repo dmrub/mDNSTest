@@ -8,6 +8,7 @@
 #include "MDNSManager.hpp"
 
 #include <cstddef>
+#include <cstring>
 #include <cassert>
 #include <memory>
 #include <sstream>
@@ -453,17 +454,19 @@ public:
 
                 case AVAHI_RESOLVER_FOUND:
                 {
-                    MDNSService service;
-                    service.setInterfaceIndex(fromAvahiIfIndex(interface));
-                    service.setName(fromAvahiStr(name));
-                    service.setType(fromAvahiStr(type));
-                    service.setDomain(fromAvahiStr(domain));
-                    service.setHost(fromAvahiStr(host_name));
-                    service.setPort(port);
-                    service.setTxtRecords(fromAvahiStringList(txt));
-
                     if (self->handler)
+                    {
+                        MDNSService service;
+                        service.setInterfaceIndex(fromAvahiIfIndex(interface));
+                        service.setName(fromAvahiStr(name));
+                        service.setType(fromAvahiStr(type));
+                        service.setDomain(fromAvahiStr(domain));
+                        service.setHost(fromAvahiStr(host_name));
+                        service.setPort(port);
+                        service.setTxtRecords(fromAvahiStringList(txt));
+
                         self->handler->onNewService(service);
+                    }
                 }
             }
         }
@@ -491,16 +494,41 @@ public:
                     return;
 
                 case AVAHI_BROWSER_NEW:
-                    //fprintf(stderr, "(Browser) NEW: service '%s' of type '%s' in domain '%s'\n", name, type, domain);
+                    {
+                        //fprintf(stderr, "(Browser) NEW: service '%s' of type '%s' in domain '%s'\n", name, type, domain);
 
-                    /* We ignore the returned resolver object. In the callback
-                       function we free it. If the server is terminated before
-                       the callback function is called the server will free
-                       the resolver for us. */
+                        // check if type is 'XXX._tcp' or 'XXX._udp'
+                        int tlen = strlen(type);
+                        if (tlen >= 5 &&
+                            type[tlen-5] == '.' &&
+                            type[tlen-4] == '_' &&
+                            ((type[tlen-3] == 't' && type[tlen-2] == 'c' && type[tlen-1] == 'p') ||
+                             (type[tlen-3] == 'u' && type[tlen-2] == 'd' && type[tlen-1] == 'p')))
+                        {
 
-                    if (!(avahi_service_resolver_new(client, interface, protocol, name, type, domain, AVAHI_PROTO_UNSPEC,
-                                                     (AvahiLookupFlags)0, resolveCB, userdata)))
-                        self->pimpl.avahiError("Failed to resolve service '" + fromAvahiStr(name) + "'", client);
+                            /* We ignore the returned resolver object. In the callback
+                               function we free it. If the server is terminated before
+                               the callback function is called the server will free
+                               the resolver for us. */
+
+                            if (!(avahi_service_resolver_new(client, interface, protocol, name, type, domain, AVAHI_PROTO_UNSPEC,
+                                                             (AvahiLookupFlags)0, resolveCB, userdata)))
+                                self->pimpl.avahiError("Failed to resolve service '" + fromAvahiStr(name) + "'", client);
+                        }
+                        else
+                        {
+                            // this is service type browsing
+                            if (self->handler)
+                            {
+                                MDNSService service;
+                                service.setInterfaceIndex(fromAvahiIfIndex(interface));
+                                service.setType(fromAvahiStr(name)+"."+fromAvahiStr(type));
+                                service.setDomain(fromAvahiStr(domain));
+
+                                self->handler->onNewService(service);
+                            }
+                        }
+                    }
                     break;
 
                 case AVAHI_BROWSER_REMOVE:
