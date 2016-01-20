@@ -644,7 +644,7 @@ void MDNSManager::registerService(MDNSService service)
                                toDnsSdStr(service.getDomain()),
                                toDnsSdStr(service.getHost()),
                                service.getPort(),
-                               txtRecordData.empty() ? 0 : txtRecordData.length()+1,
+                               static_cast<uint16_t>(txtRecordData.empty() ? 0 : txtRecordData.length()+1),
                                txtRecordData.empty() ? NULL : txtRecordData.c_str(),
                                &MDNSManager::PImpl::RegisterRecord::registerCB, // register callback
                                rrec.get());
@@ -678,7 +678,7 @@ void MDNSManager::registerServiceBrowser(MDNSInterfaceIndex interfaceIndex,
                 if (!it->empty())
                     subtype += ("," + *it);
                 pimpl_->registerServiceBrowser(toDnsSdInterfaceIndex(interfaceIndex),
-                                               toDnsSdStr(subtype),
+                                               subtype.c_str(),
                                                toDnsSdStr(domain),
                                                browser);
             }
@@ -686,7 +686,7 @@ void MDNSManager::registerServiceBrowser(MDNSInterfaceIndex interfaceIndex,
         else
         {
             pimpl_->registerServiceBrowser(toDnsSdInterfaceIndex(interfaceIndex),
-                                           toDnsSdStr(type),
+                                           type.c_str(),
                                            toDnsSdStr(domain),
                                            browser);
         }
