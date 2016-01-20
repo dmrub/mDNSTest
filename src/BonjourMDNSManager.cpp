@@ -282,8 +282,8 @@ public:
             RegisterRecord *self = static_cast<RegisterRecord*>(context);
             std::unique_ptr<RegisterRecord> g(self); // delete RegisterRecord on return
 
-            std::string serviceType = toDnsSdStr(regtype);
-            std::string serviceDomain = toDnsSdStr(domain);
+            std::string serviceType = fromDnsSdStr(regtype);
+            std::string serviceDomain = fromDnsSdStr(domain);
 
             // std::cerr << "REGISTER CALLBACK "<<name<<" EC "<<errorCode<<" FLAGS "<<flags<<" PTR "<<sdRef<<std::endl;
 
@@ -291,7 +291,7 @@ public:
             {
                 if (flags & kDNSServiceFlagsAdd)
                 {
-                    std::string newName = toDnsSdStr(name);
+                    std::string newName = fromDnsSdStr(name);
                     if (self->serviceName != newName)
                     {
                         if (self->pimpl.alternativeServiceNameHandler)
@@ -352,8 +352,8 @@ public:
         {
             BrowserRecord *self = static_cast<BrowserRecord*>(context);
 
-            std::string type = toDnsSdStr(regtype);
-            std::string domain = toDnsSdStr(replyDomain);
+            std::string type = fromDnsSdStr(regtype);
+            std::string domain = fromDnsSdStr(replyDomain);
 
             if (flags & kDNSServiceFlagsAdd)
             {
