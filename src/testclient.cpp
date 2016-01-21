@@ -47,7 +47,7 @@ int main(int argc, char **argv)
 {
     MDNSManager mgr;
 
-    MDNSService s;
+    MDNSService s1, s2;
 
     mgr.setAlternativeServiceNameHandler([](const std::string &newName, const std::string &oldName)
     {
@@ -65,16 +65,23 @@ int main(int argc, char **argv)
     mgr.registerServiceBrowser(MDNS_IF_ANY, "_http._tcp", "", httpBrowser);
     mgr.registerServiceBrowser(MDNS_IF_ANY, "_http._tcp", {"_arvida"}, "", arvidaBrowser);
 
-    s.setName("MyService").setPort(8080).setType("_http._tcp").addTxtRecord("path=/foobar");
-    mgr.registerService(s);
+    s1.setName("MyService").setPort(8080).setType("_http._tcp").addTxtRecord("path=/foobar");
+    mgr.registerService(s1);
 
     std::cout << "Running loop...";
     mgr.run();
 
-    s.setName("ARVIDA Service").setPort(9090).addSubtype("_arvida").addTxtRecord("FOO=BOO");
-    mgr.registerService(s);
+    s2.setName("ARVIDA Service").setPort(9090).setType("_http._tcp").addSubtype("_arvida").addTxtRecord("FOO=BOO");
+    mgr.registerService(s2);
 
     std::cin.get();
 
+    std::cout<<"Unregister services..."<<std::endl;
+
+    mgr.unregisterService(s1);
+    mgr.unregisterService(s2);
+
     std::cout<<"Exiting"<<std::endl;
+
+    std::cin.get();
 }

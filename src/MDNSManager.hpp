@@ -22,9 +22,15 @@ namespace MDNS
 typedef uint32_t MDNSInterfaceIndex;
 const MDNSInterfaceIndex MDNS_IF_ANY = 0; // use any interface for the service
 
+class MDNSService;
+
 class MDNSService
 {
+    friend class MDNSManager;
 public:
+
+    typedef unsigned int Id;
+    static const Id NO_SERVICE = 0;
 
     MDNSService()
         : interfaceIndex_(MDNS_IF_ANY)
@@ -35,8 +41,21 @@ public:
         , port_()
         , txtRecords_()
         , subtypes_()
+        , id_(NO_SERVICE)
     {
     }
+
+    MDNSService(const std::string &name)
+        : interfaceIndex_(MDNS_IF_ANY)
+        , name_(name)
+        , type_()
+        , domain_()
+        , host_()
+        , port_()
+        , txtRecords_()
+        , subtypes_()
+        , id_(NO_SERVICE)
+    { }
 
     MDNSService(const MDNSService &other)
         : interfaceIndex_(other.interfaceIndex_)
@@ -47,6 +66,7 @@ public:
         , port_(other.port_)
         , txtRecords_(other.txtRecords_)
         , subtypes_(other.subtypes_)
+        , id_(other.id_)
     { }
 
     MDNSService(MDNSService &&other)
@@ -58,17 +78,7 @@ public:
         , port_(other.port_)
         , txtRecords_(std::move(other.txtRecords_))
         , subtypes_(std::move(other.subtypes_))
-    { }
-
-    MDNSService(const std::string &name)
-        : interfaceIndex_(MDNS_IF_ANY)
-        , name_(name)
-        , type_()
-        , domain_()
-        , host_()
-        , port_()
-        , txtRecords_()
-        , subtypes_()
+        , id_(other.id_)
     { }
 
     MDNSService & operator=(const MDNSService &other)
@@ -83,6 +93,7 @@ public:
             port_ = other.port_;
             txtRecords_ = other.txtRecords_;
             subtypes_ = other.subtypes_;
+            id_ = other.id_;
         }
         return *this;
     }
@@ -99,6 +110,7 @@ public:
             port_ = other.port_;
             txtRecords_ = other.txtRecords_;
             subtypes_ = other.subtypes_;
+            id_ = other.id_;
         }
         return *this;
     }
@@ -250,6 +262,11 @@ public:
         return *this;
     }
 
+    Id getId() const
+    {
+        return id_;
+    }
+
 private:
     MDNSInterfaceIndex interfaceIndex_;   // index of the interface
     std::string name_;                    // name of the service
@@ -259,6 +276,7 @@ private:
     unsigned int port_;                   // the port, in network byte order, on which the service accepts connections.
     std::vector<std::string> txtRecords_; // TXT records
     std::vector<std::string> subtypes_;   // subtypes of the service
+    Id id_;                               // registered service ID or NO_SERVICE
 };
 
 class MDNSServiceBrowser
@@ -300,7 +318,9 @@ public:
      */
     void setErrorHandler(ErrorHandler handler);
 
-    void registerService(MDNSService service);
+    void registerService(MDNSService &service);
+
+    void unregisterService(MDNSService &service);
 
     /**
      * Register service browser for services on specified interface index,
@@ -352,6 +372,13 @@ public:
     static bool isAvailable();
 
 private:
+
+    static MDNSService::Id getNewServiceId();
+
+    static void setServiceId(MDNSService &service, MDNSService::Id id)
+    {
+        service.id_ = id;
+    }
 
     void registerServiceBrowser(MDNSInterfaceIndex interfaceIndex,
                                 const std::string &type,

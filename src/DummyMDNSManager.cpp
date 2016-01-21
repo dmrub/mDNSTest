@@ -43,7 +43,12 @@ void MDNSManager::setErrorHandler(MDNSManager::ErrorHandler handler)
 {
 }
 
-void MDNSManager::registerService(MDNSService service)
+void MDNSManager::registerService(MDNSService &service)
+{
+
+}
+
+void MDNSManager::unregisterService(MDNSService &service)
 {
 
 }

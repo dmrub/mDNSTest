@@ -13,6 +13,7 @@
 #include <memory>
 #include <sstream>
 #include <stdexcept>
+#include <algorithm>
 #include <unordered_map>
 #include <utility>
 #include <atomic>
@@ -232,6 +233,11 @@ public:
             if (group)
             {
                 avahi_entry_group_reset(group);
+                if (services.empty())
+                {
+                    avahi_entry_group_free(group);
+                    group = 0;
+                }
                 nextToRegister = 0;
             }
         }
@@ -284,6 +290,15 @@ public:
         {
             assert(client);
 
+            if (services.empty())
+            {
+                avahi_entry_group_reset(group);
+                avahi_entry_group_free(group);
+                nextToRegister = 0;
+                group = 0;
+                return true;
+            }
+
             if (!group)
             {
                 if (!(group = avahi_entry_group_new(client, &entryGroupCB,
@@ -333,6 +348,7 @@ public:
                     ++nextToRegister;
                 }
             } while (repeatRegistration);
+
 
             if (!needToCommit)
             {
@@ -471,6 +487,21 @@ public:
             }
         }
 
+        /**
+         * Checks if type is of form 'XXX._tcp' or 'XXX._udp'
+         */
+        static bool isValidType(const char *type)
+        {
+            if (!type)
+                return false;
+            const int tlen = strlen(type);
+            return (tlen >= 5 &&
+                    type[tlen-5] == '.' &&
+                    type[tlen-4] == '_' &&
+                    ((type[tlen-3] == 't' && type[tlen-2] == 'c' && type[tlen-1] == 'p') ||
+                            (type[tlen-3] == 'u' && type[tlen-2] == 'd' && type[tlen-1] == 'p')));
+        }
+
         static void browseCB(
             AvahiServiceBrowser *b,
             AvahiIfIndex interface,
@@ -498,12 +529,8 @@ public:
                         //fprintf(stderr, "(Browser) NEW: service '%s' of type '%s' in domain '%s'\n", name, type, domain);
 
                         // check if type is 'XXX._tcp' or 'XXX._udp'
-                        int tlen = strlen(type);
-                        if (tlen >= 5 &&
-                            type[tlen-5] == '.' &&
-                            type[tlen-4] == '_' &&
-                            ((type[tlen-3] == 't' && type[tlen-2] == 'c' && type[tlen-1] == 'p') ||
-                             (type[tlen-3] == 'u' && type[tlen-2] == 'd' && type[tlen-1] == 'p')))
+
+                        if (isValidType(type))
                         {
 
                             /* We ignore the returned resolver object. In the callback
@@ -534,7 +561,12 @@ public:
                 case AVAHI_BROWSER_REMOVE:
                     //fprintf(stderr, "(Browser) REMOVE: service '%s' of type '%s' in domain '%s'\n", name, type, domain);
                     if (self->handler)
-                        self->handler->onRemovedService(fromAvahiStr(name), fromAvahiStr(type), fromAvahiStr(domain));
+                    {
+                        if (isValidType(type))
+                            self->handler->onRemovedService(fromAvahiStr(name), fromAvahiStr(type), fromAvahiStr(domain));
+                        else
+                            self->handler->onRemovedService("", fromAvahiStr(name)+"."+fromAvahiStr(type), fromAvahiStr(domain));
+                    }
                     break;
 
                 case AVAHI_BROWSER_ALL_FOR_NOW:
@@ -776,8 +808,11 @@ void MDNSManager::setErrorHandler(MDNSManager::ErrorHandler handler)
     pimpl_->errorHandler = handler;
 }
 
-void MDNSManager::registerService(MDNSService service)
+void MDNSManager::registerService(MDNSService &service)
 {
+    if (service.getId() != MDNSService::NO_SERVICE)
+        throw std::logic_error("Service was already registered");
+
     AvahiPollGuard g(pimpl_->threadedPoll);
 
     MDNSManager::PImpl::AvahiServiceRecord *serviceRec = 0;
@@ -790,8 +825,39 @@ void MDNSManager::registerService(MDNSService service)
     }
     serviceRec = &it->second;
 
-    serviceRec->services.push_back(std::move(service));
+    const MDNSService::Id serviceId = getNewServiceId();
+    setServiceId(service, serviceId);
+
+    serviceRec->services.push_back(service);
     pimpl_->registerMissingServices(pimpl_->client, /*callFromThread=*/false);
+}
+
+void MDNSManager::unregisterService(MDNSService &service)
+{
+    if (service.getId() == MDNSService::NO_SERVICE)
+        throw std::logic_error("Service was not registered");
+
+    AvahiPollGuard g(pimpl_->threadedPoll);
+
+    for (auto it = pimpl_->serviceRecords.begin(), eit = pimpl_->serviceRecords.end(); it != eit; ++it)
+    {
+        bool changed = false;
+        for (auto jt = it->second.services.begin(); jt != it->second.services.end(); )
+        {
+            if (jt->getId() == service.getId())
+            {
+                jt = it->second.services.erase(jt);
+                changed = true;
+            }
+            else
+                ++jt;
+        }
+        if (changed)
+        {
+            //it->second.resetServices();
+            it->second.registerMissingServices(pimpl_->client, /*callFromThread=*/false);
+        }
+    }
 }
 
 void MDNSManager::registerServiceBrowser(MDNSInterfaceIndex interfaceIndex,

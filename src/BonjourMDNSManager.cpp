@@ -252,7 +252,7 @@ public:
     ImplMutex mutex;
     std::atomic<bool> processEvents;
     DNSServiceRef connectionRef;
-    std::vector<DNSServiceRef> serviceRefs;
+    std::unordered_map<MDNSService::Id, DNSServiceRef> serviceRefs;
 
     struct RegisterRecord
     {
@@ -650,8 +650,11 @@ void MDNSManager::setErrorHandler(MDNSManager::ErrorHandler handler)
     pimpl_->errorHandler = handler;
 }
 
-void MDNSManager::registerService(MDNSService service)
+void MDNSManager::registerService(MDNSService &service)
 {
+    if (service.getId() != MDNSService::NO_SERVICE)
+        throw std::logic_error("Service was already registered");
+
     bool invalidFields;
     std::string txtRecordData = encodeTxtRecordData(service.getTxtRecords(), invalidFields);
     if (invalidFields)
@@ -695,7 +698,23 @@ void MDNSManager::registerService(MDNSService service)
             throw DnsSdError(std::string("DNSServiceRegister: ")+getDnsSdErrorName(err));
 
         rrec.release(); // registration callback will delete RegisterRecord
-        pimpl_->serviceRefs.push_back(sdRef);
+
+        const MDNSService::Id serviceId = getNewServiceId();
+        setServiceId(service, serviceId);
+        pimpl_->serviceRefs.insert(std::make_pair(serviceId, sdRef));
+    }
+}
+
+void MDNSManager::unregisterService(MDNSService &service)
+{
+    ImplLockGuard g(pimpl_->mutex);
+    if (service.getId() == MDNSService::NO_SERVICE)
+        throw std::logic_error("Service was not registered");
+    auto it = pimpl_->serviceRefs.find(service.getId());
+    if (it != pimpl_->serviceRefs.end())
+    {
+        DNSServiceRefDeallocate(it->second);
+        pimpl_->serviceRefs.erase(it);
     }
 }
 
