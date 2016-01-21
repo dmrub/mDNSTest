@@ -252,15 +252,16 @@ public:
     ImplMutex mutex;
     std::atomic<bool> processEvents;
     DNSServiceRef connectionRef;
-    std::unordered_map<MDNSService::Id, DNSServiceRef> serviceRefs;
 
     struct RegisterRecord
     {
+        DNSServiceRef serviceRef;
+        MDNSService::Id serviceId;
         std::string serviceName;
         MDNSManager::PImpl &pimpl;
 
         RegisterRecord(const std::string &serviceName, MDNSManager::PImpl &pimpl)
-            : serviceName(serviceName), pimpl(pimpl)
+            : serviceRef(0), serviceId(MDNSService::NO_SERVICE), serviceName(serviceName), pimpl(pimpl)
         { }
 
         /**
@@ -280,12 +281,11 @@ public:
             // Context is same pointer that was given to the callout
             // If registration was successful, errorCode = kDNSServiceErr_NoError
             RegisterRecord *self = static_cast<RegisterRecord*>(context);
-            std::unique_ptr<RegisterRecord> g(self); // delete RegisterRecord on return
 
             std::string serviceType = fromDnsSdStr(regtype);
             std::string serviceDomain = fromDnsSdStr(domain);
 
-            // std::cerr << "REGISTER CALLBACK "<<name<<" EC "<<errorCode<<" FLAGS "<<flags<<" PTR "<<sdRef<<std::endl;
+            // std::cerr << "REGISTER CALLBACK "<<name<<" EC "<<errorCode<<" FLAGS "<<flags<<" PTR "<<sdRef<<" self = "<<self<<std::endl;
 
             if (errorCode == kDNSServiceErr_NoError)
             {
@@ -314,6 +314,9 @@ public:
         }
 
     };
+
+    typedef std::unordered_map<MDNSService::Id, std::unique_ptr<RegisterRecord>> RegisterRecordMap;
+    RegisterRecordMap registerRecordMap;
 
     struct BrowserRecord
     {
@@ -697,11 +700,11 @@ void MDNSManager::registerService(MDNSService &service)
         if (err != kDNSServiceErr_NoError)
             throw DnsSdError(std::string("DNSServiceRegister: ")+getDnsSdErrorName(err));
 
-        rrec.release(); // registration callback will delete RegisterRecord
-
+        rrec->serviceRef = sdRef;
         const MDNSService::Id serviceId = getNewServiceId();
+        rrec->serviceId = serviceId;
         setServiceId(service, serviceId);
-        pimpl_->serviceRefs.insert(std::make_pair(serviceId, sdRef));
+        pimpl_->registerRecordMap.insert(std::make_pair(serviceId, std::move(rrec)));
     }
 }
 
@@ -710,11 +713,11 @@ void MDNSManager::unregisterService(MDNSService &service)
     ImplLockGuard g(pimpl_->mutex);
     if (service.getId() == MDNSService::NO_SERVICE)
         throw std::logic_error("Service was not registered");
-    auto it = pimpl_->serviceRefs.find(service.getId());
-    if (it != pimpl_->serviceRefs.end())
+    auto it = pimpl_->registerRecordMap.find(service.getId());
+    if (it != pimpl_->registerRecordMap.end())
     {
-        DNSServiceRefDeallocate(it->second);
-        pimpl_->serviceRefs.erase(it);
+        DNSServiceRefDeallocate(it->second->serviceRef);
+        pimpl_->registerRecordMap.erase(it);
     }
 }
 
