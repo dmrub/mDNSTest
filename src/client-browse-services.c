@@ -32,6 +32,7 @@
 #include <avahi-common/simple-watch.h>
 #include <avahi-common/malloc.h>
 #include <avahi-common/error.h>
+#include <avahi-common/timeval.h>
 
 static AvahiSimplePoll *simple_poll = NULL;
 
@@ -149,11 +150,18 @@ static void client_callback(AvahiClient *c, AvahiClientState state, AVAHI_GCC_UN
     }
 }
 
+static void modify_callback(AVAHI_GCC_UNUSED AvahiTimeout *e, void *userdata) {
+    AvahiClient *client = userdata;
+    avahi_simple_poll_quit(simple_poll);
+}
+
 int main(AVAHI_GCC_UNUSED int argc, AVAHI_GCC_UNUSED char*argv[]) {
     AvahiClient *client = NULL;
     AvahiServiceBrowser *sb = NULL;
     int error;
     int ret = 1;
+    struct timeval tv;
+
 
     /* Allocate main loop object */
     if (!(simple_poll = avahi_simple_poll_new())) {
@@ -175,6 +183,13 @@ int main(AVAHI_GCC_UNUSED int argc, AVAHI_GCC_UNUSED char*argv[]) {
         fprintf(stderr, "Failed to create service browser: %s\n", avahi_strerror(avahi_client_errno(client)));
         goto fail;
     }
+
+    /* After 40s do some weird modification to the service */
+    avahi_simple_poll_get(simple_poll)->timeout_new(
+        avahi_simple_poll_get(simple_poll),
+        avahi_elapse_time(&tv, 1000*40, 0),
+        modify_callback,
+        client);
 
     /* Run the main loop */
     avahi_simple_poll_loop(simple_poll);

@@ -1,0 +1,3 @@
+[submodule "mDNSWrapper"]
+	path = external/mDNSWrapper
+	url = https://github.com/dmrub/mDNSWrapper

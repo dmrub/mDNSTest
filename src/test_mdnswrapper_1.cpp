@@ -61,9 +61,11 @@ int main(int argc, char **argv)
 
     MyBrowser::Ptr httpBrowser = std::make_shared<MyBrowser>("HTTP");
     MyBrowser::Ptr arvidaBrowser = std::make_shared<MyBrowser>("ARVIDA");
+    MyBrowser::Ptr allBrowser = std::make_shared<MyBrowser>("ALL");
 
     mgr.registerServiceBrowser(MDNS_IF_ANY, "_http._tcp", "", httpBrowser);
     mgr.registerServiceBrowser(MDNS_IF_ANY, "_http._tcp", {"_arvida"}, "", arvidaBrowser);
+    //mgr.registerServiceBrowser(MDNS_IF_ANY, "", "", allBrowser);
 
     s1.setName("MyService").setPort(8080).setType("_http._tcp").addTxtRecord("path=/foobar");
     mgr.registerService(s1);
