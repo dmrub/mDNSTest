@@ -51,6 +51,14 @@ find_package(Threads REQUIRED)
 find_package(Bonjour)
 find_package(Avahi)
 
+# Build
+if(DISABLE_AVAHI)
+set(AVAHI_FOUND FALSE)
+endif()
+if(DISABLE_BONJOUR)
+set(BONJOUR_FOUND FALSE)
+endif()
+
 if (BONJOUR_FOUND)
   include_directories(${BONJOUR_INCLUDE_DIR})
 

@@ -34,9 +34,9 @@ public:
         }
     }
 
-    void onRemovedService(const std::string &name, const std::string &type, const std::string &domain) override
+    void onRemovedService(const std::string &name, const std::string &type, const std::string &domain, MDNSInterfaceIndex interfaceIndex) override
     {
-        std::cerr<<"Removed "<<name_<<" service "<<name<<" of type "<<type<<" on domain "<<domain<<std::endl;
+        std::cerr<<"Removed "<<name_<<" service "<<name<<" of type "<<type<<" on domain "<<domain<<" interface "<<interfaceIndex<<std::endl;
     }
 
 private:
@@ -63,8 +63,8 @@ int main(int argc, char **argv)
     MyBrowser::Ptr arvidaBrowser = std::make_shared<MyBrowser>("ARVIDA");
     MyBrowser::Ptr allBrowser = std::make_shared<MyBrowser>("ALL");
 
-    mgr.registerServiceBrowser(MDNS_IF_ANY, "_http._tcp", "", httpBrowser);
-    mgr.registerServiceBrowser(MDNS_IF_ANY, "_http._tcp", {"_arvida"}, "", arvidaBrowser);
+    mgr.registerServiceBrowser(httpBrowser, MDNS_IF_ANY, "_http._tcp", "");
+    mgr.registerServiceBrowser(arvidaBrowser, MDNS_IF_ANY, "_http._tcp", {"_arvida"}, "");
     //mgr.registerServiceBrowser(MDNS_IF_ANY, "", "", allBrowser);
 
     s1.setName("MyService").setPort(8080).setType("_http._tcp").addTxtRecord("path=/foobar");
